@@ -3,6 +3,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
+import { normalizeIndiaMobile } from './otp-service.mjs';
+import { ensureMonthlyImportSchema } from './monthly-import.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const dataDirectory = join(directory, 'data');
@@ -142,6 +144,35 @@ if (!currentCustodyColumns.includes('finance_reviewed_at')) db.exec('ALTER TABLE
 if (!currentCustodyColumns.includes('finance_reviewed_by_user_id')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_reviewed_by_user_id TEXT REFERENCES users(id)');
 if (!currentCustodyColumns.includes('finance_review_note')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_review_note TEXT');
 
+ensureMonthlyImportSchema(db);
+
+const userColumns = db.prepare('PRAGMA table_info(users)').all().map((column) => column.name);
+if (!userColumns.includes('mobile_e164')) db.exec('ALTER TABLE users ADD COLUMN mobile_e164 TEXT');
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS users_mobile_e164_unique ON users(mobile_e164) WHERE mobile_e164 IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS otp_challenges (
+    id TEXT PRIMARY KEY,
+    mobile_e164 TEXT NOT NULL,
+    purpose TEXT NOT NULL DEFAULT 'sign_in' CHECK(purpose IN ('sign_in', 'sign_up')),
+    provider_request_id TEXT,
+    requested_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    verified_at TEXT,
+    request_ip TEXT
+  );
+  CREATE INDEX IF NOT EXISTS otp_challenges_mobile_time ON otp_challenges(mobile_e164, requested_at DESC);
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+  );
+`);
+const otpChallengeColumns = db.prepare('PRAGMA table_info(otp_challenges)').all().map((column) => column.name);
+if (!otpChallengeColumns.includes('purpose')) db.exec("ALTER TABLE otp_challenges ADD COLUMN purpose TEXT NOT NULL DEFAULT 'sign_in'");
+
 function now() {
   return new Date().toISOString();
 }
@@ -188,6 +219,15 @@ function seedIfEmpty() {
 
 seedIfEmpty();
 
+db.prepare(`INSERT OR IGNORE INTO users (id, tenant_id, role, name, email, password_hash, mobile, city)
+  SELECT 'user-staff', tenant_id, 'finance_staff', 'Nisha Verma', 'staff@aaryafinance.test', password_hash, '+91 98450 11113', 'Bengaluru'
+  FROM users WHERE id = 'user-admin'`).run();
+
+const saveNormalizedMobile = db.prepare('UPDATE users SET mobile_e164 = ? WHERE id = ?');
+for (const user of db.prepare('SELECT id, mobile FROM users WHERE mobile IS NOT NULL AND mobile_e164 IS NULL').all()) {
+  saveNormalizedMobile.run(normalizeIndiaMobile(user.mobile), user.id);
+}
+
 // Preserve existing demo cases while enforcing authority approval for every new assignment.
 db.prepare(`UPDATE recovery_cases SET
   authority_document_file_name = COALESCE(authority_document_file_name, 'legacy-authority-record'),
@@ -211,6 +251,8 @@ db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, 
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('003-structured-inspection-checklist', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('004-release-pass-ledger', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('005-finance-approval-gates', now());
+db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('006-otp-sessions', now());
+db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('007-monthly-import-snapshots', now());
 
 function backupFileName() {
   return `seizer-${new Date().toISOString().slice(0, 10)}.db`;

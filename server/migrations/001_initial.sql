@@ -135,7 +135,7 @@ CREATE TABLE monthly_account_snapshots (
   overdue_days INTEGER NOT NULL CHECK (overdue_days >= 0),
   source_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, loan_account_id, snapshot_month),
+  UNIQUE (organization_id, loan_account_id, import_batch_id),
   UNIQUE (organization_id, id),
   FOREIGN KEY (organization_id, loan_account_id)
     REFERENCES loan_accounts(organization_id, id),

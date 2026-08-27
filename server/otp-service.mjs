@@ -42,3 +42,17 @@ export function createOtpService({ authKey, templateId, fetchImpl = fetch }) {
     },
   };
 }
+
+export function createDevelopmentOtpService(code) {
+  return {
+    async send(mobile) {
+      normalizeIndiaMobile(mobile);
+      return { requestId: null, developmentCode: code };
+    },
+    async verify(mobile, submittedCode) {
+      normalizeIndiaMobile(mobile);
+      if (String(submittedCode) !== code) throw new Error('The OTP is incorrect.');
+      return { verified: true };
+    },
+  };
+}

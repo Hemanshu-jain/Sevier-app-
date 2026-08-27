@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createOtpService, normalizeIndiaMobile } from '../server/otp-service.mjs';
+import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from '../server/otp-service.mjs';
 
 test('normalizes supported Indian mobile numbers', () => {
   assert.equal(normalizeIndiaMobile('98765 43210'), '919876543210');
@@ -61,4 +61,11 @@ test('turns provider rejections into safe errors', async () => {
   });
 
   await assert.rejects(() => otp.verify('9876543210', '123456'), /Invalid OTP/);
+});
+
+test('development OTP provider accepts only its configured local code', async () => {
+  const otp = createDevelopmentOtpService('654321');
+  assert.deepEqual(await otp.send('9876543210'), { requestId: null, developmentCode: '654321' });
+  await assert.rejects(() => otp.verify('9876543210', '123456'), /incorrect/i);
+  assert.deepEqual(await otp.verify('9876543210', '654321'), { verified: true });
 });

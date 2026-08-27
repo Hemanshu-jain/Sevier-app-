@@ -72,6 +72,17 @@ export function hasPermission(permissions, permission) {
   return Array.isArray(permissions) && permissions.includes(permission);
 }
 
+const legacyRoles = Object.freeze({
+  super_admin: 'owner',
+  finance_manager: 'manager',
+  finance_staff: 'staff',
+  agent: 'agent',
+});
+
+export function permissionsForRole(role) {
+  return ROLE_TEMPLATES[legacyRoles[role] || role] || [];
+}
+
 const transitions = new Map([
   [CASE_STATUS.DRAFT, [CASE_STATUS.AWAITING_AUTHORITY, CASE_STATUS.CANCELLED]],
   [CASE_STATUS.AWAITING_AUTHORITY, [CASE_STATUS.READY_TO_ASSIGN, CASE_STATUS.CANCELLED]],

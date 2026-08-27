@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PERMISSIONS, ROLE_TEMPLATES, hasPermission } from '../shared/contracts.mjs';
+import { PERMISSIONS, ROLE_TEMPLATES, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
 
 test('owner template receives every permission', () => {
   assert.deepEqual(new Set(ROLE_TEMPLATES.owner), new Set(Object.values(PERMISSIONS)));
@@ -27,4 +27,12 @@ test('custom roles use their stored permission list exactly', () => {
   assert.equal(hasPermission(customPermissions, PERMISSIONS.CASE_ASSIGN), true);
   assert.equal(hasPermission(customPermissions, PERMISSIONS.CUSTODY_REVIEW), false);
   assert.equal(hasPermission(null, PERMISSIONS.CASE_ASSIGN), false);
+});
+
+test('legacy demo roles resolve to the matching permission template', () => {
+  assert.equal(permissionsForRole('super_admin'), ROLE_TEMPLATES.owner);
+  assert.equal(permissionsForRole('finance_manager'), ROLE_TEMPLATES.manager);
+  assert.equal(permissionsForRole('finance_staff'), ROLE_TEMPLATES.staff);
+  assert.equal(permissionsForRole('agent'), ROLE_TEMPLATES.agent);
+  assert.deepEqual(permissionsForRole('unknown'), []);
 });

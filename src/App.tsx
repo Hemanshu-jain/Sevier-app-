@@ -31,7 +31,7 @@ import type { Session } from './api';
 import type { Agent, AppNotification, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
 
 type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'notifications' | 'settings';
-type DialogType = 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
+type DialogType = 'import' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -87,6 +87,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionError, setActionError] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
   const [caseEvidence, setCaseEvidence] = useState<EvidenceRecord[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [printPass, setPrintPass] = useState<ReleasePass | null>(null);
@@ -122,12 +123,22 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     api.evidence(session.token, selectedCaseId).then(({ evidence }) => setCaseEvidence(evidence)).catch(() => setCaseEvidence([])).finally(() => setEvidenceLoading(false));
   }, [selectedCaseId, session.token]);
 
-  async function createImportedCase() {
+  async function importMonthlyRegister(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const file = formData.get('file');
+    const snapshotMonth = String(formData.get('snapshotMonth') || '');
+    if (!(file instanceof File) || !file.size || !snapshotMonth) return;
     try {
       setActionError('');
-      await api.importDemoCase(session.token);
+      setActionNotice('');
+      const { result } = await api.importMonthly(session.token, file, `${snapshotMonth}-01`);
       await loadWorkspace();
       setPage('register');
+      setDialog(null);
+      setActionNotice(result.duplicate
+        ? 'This file was already imported; no records changed.'
+        : `${result.accepted} accounts processed: ${result.created} new, ${result.updated} updated${result.rejected ? `, ${result.rejected} rejected` : ''}.`);
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to import the register.'); }
   }
 
@@ -205,7 +216,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
 
   const pageContent: Record<Page, ReactNode> = {
     dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} onSelectCase={setSelectedCaseId} onPageChange={setPage} />, 
-    register: <RegisterPage cases={visibleCases} onImport={createImportedCase} onSelectCase={setSelectedCaseId} />, 
+    register: <RegisterPage cases={visibleCases} onImport={() => setDialog('import')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
     agents: <AgentsPage agents={agentList} cases={cases} onSelectCase={setSelectedCaseId} />, 
     custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
@@ -235,13 +246,14 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
           <div className="topbar-actions">
             <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search cases, people, vehicles..." /><kbd>⌘ K</kbd></label>
             <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount}</b>}</button>
-            <button className="primary-button" onClick={createImportedCase}><Plus size={16} /> Import register</button>
+            <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>
           </div>
         </header>
-        <section className="content-area">{actionError && <div className="app-error">{actionError}<button onClick={() => setActionError('')}><X size={14} /></button></div>}{loading ? <div className="workspace-loading">Loading your tenant workspace…</div> : pageContent[page]}</section>
+        <section className="content-area">{actionError && <div className="app-error">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading">Loading your tenant workspace…</div> : pageContent[page]}</section>
       </main>
 
       {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onCloseCase={closeCase} onPrint={printReleasePass} />}
+      {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
       {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} />}
@@ -378,6 +390,11 @@ function PrintableReleasePass({ pass, caseItem, custody, tenantName }: { pass: R
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   return <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><div><p className="eyebrow">Finance-controlled workflow</p><h2>{title}</h2></div><button className="close-button" onClick={onClose}><X size={18} /></button></div>{children}</section></div>;
+}
+
+function ImportDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  return <Modal title="Import monthly register" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Upload the financer’s reviewed CSV or XLSX file. Existing open accounts are updated while every monthly snapshot remains in the audit history.</p><label className="field-label">Loan cycle month<input name="snapshotMonth" type="month" required defaultValue={currentMonth} /></label><label className="field-label">Monthly delinquency file<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></label><p className="import-columns">Required columns: account number, borrower name, mobile, address, vehicle registration, make/model, vehicle type, pending amount, and overdue days.</p><label className="check-line"><input required type="checkbox" /> I confirm this file was reviewed by the finance company before import.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Plus size={15} /> Import accounts</button></div></form></Modal>;
 }
 
 function AssignDialog({ caseItem, agentList, onClose, onSubmit }: { caseItem: RecoveryCase; agentList: Agent[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

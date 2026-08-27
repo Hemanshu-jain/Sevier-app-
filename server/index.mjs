@@ -1,7 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
@@ -12,12 +10,19 @@ import { loadConfig } from './config.mjs';
 import { validateCaseAction } from './case-actions.mjs';
 import { runTransaction } from './sqlite-transaction.mjs';
 import { isAllowedAuthorityDocument } from './file-validation.mjs';
+import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from './otp-service.mjs';
+import { requestSignInOtp, verifySignInOtp } from './otp-auth.mjs';
+import { hashSessionToken } from './session-token.mjs';
+import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
+import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
+import { importMonthlyRows } from './monthly-import.mjs';
 
 const app = express();
 const config = loadConfig();
 const port = config.port;
-const jwtSecret = config.sessionSecret;
-const financeRoles = ['super_admin', 'finance_manager', 'finance_staff'];
+const otpProvider = config.nodeEnv === 'production'
+  ? createOtpService({ authKey: config.msg91AuthKey, templateId: config.msg91OtpTemplateId })
+  : createDevelopmentOtpService(config.developmentOtpCode);
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const uploadDirectory = join(appDirectory, 'uploads');
 mkdirSync(uploadDirectory, { recursive: true });
@@ -39,11 +44,17 @@ const authorityUpload = multer({
   fileFilter: (_req, file, callback) => callback(null, /^(image\/(jpeg|png)|application\/pdf)$/.test(file.mimetype)),
 });
 
+const monthlyImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => callback(null, /\.(csv|xlsx)$/i.test(file.originalname)),
+});
+
 app.use(cors({ origin: true, credentials: false }));
 app.use(express.json({ limit: '2mb' }));
 
 function apiUser(row) {
-  return { id: row.id, tenantId: row.tenant_id, role: row.role, name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name };
+  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name };
 }
 
 function mapCase(row) {
@@ -92,18 +103,22 @@ function auth(req, res, next) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required.' });
   try {
-    const decoded = jwt.verify(token, jwtSecret);
-    const user = db.prepare(`SELECT users.*, tenants.name AS tenant_name FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ? AND users.active = 1`).get(decoded.sub);
+    const user = db.prepare(`SELECT users.*, tenants.name AS tenant_name, auth_sessions.id AS session_id
+      FROM auth_sessions
+      JOIN users ON users.id = auth_sessions.user_id
+      JOIN tenants ON tenants.id = users.tenant_id
+      WHERE auth_sessions.token_hash = ? AND auth_sessions.revoked_at IS NULL AND auth_sessions.expires_at > ? AND users.active = 1`).get(hashSessionToken(token), isoNow());
     if (!user) return res.status(401).json({ error: 'This user account is no longer active.' });
     req.user = apiUser(user);
+    req.sessionId = user.session_id;
     next();
   } catch {
     return res.status(401).json({ error: 'Your session is invalid or expired.' });
   }
 }
 
-function requireRoles(...roles) {
-  return (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ error: 'Your role cannot perform this action.' });
+function requirePermission(permission) {
+  return (req, res, next) => hasPermission(req.user.permissions, permission) ? next() : res.status(403).json({ error: 'Your role cannot perform this action.' });
 }
 
 function caseForUser(id, user) {
@@ -121,18 +136,46 @@ function requireAssignedCase(req, res, next) {
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/auth/login', (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
-  const user = db.prepare(`SELECT users.*, tenants.name AS tenant_name FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.email = ? AND users.active = 1`).get(email);
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid email or password.' });
-  const apiSessionUser = apiUser(user);
-  const token = jwt.sign({ sub: user.id, tenant: user.tenant_id, role: user.role }, jwtSecret, { expiresIn: '8h' });
-  addAudit({ tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.login', detail: 'Signed in to the local development workspace.' });
-  return res.json({ token, user: apiSessionUser });
+app.post('/api/auth/request-otp', async (req, res) => {
+  try {
+    const mobile = String(req.body?.mobile || '');
+    const result = await requestSignInOtp({ database: db, otpProvider, mobile, requestIp: req.ip });
+    const user = db.prepare('SELECT * FROM users WHERE mobile_e164 = ?').get(normalizeIndiaMobile(mobile));
+    addAudit({ tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.otp_requested', detail: 'A sign-in OTP was requested.' });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'OTP could not be sent.';
+    const status = /too many/i.test(message) ? 429 : /unavailable|rejected/i.test(message) ? 503 : 422;
+    return res.status(status).json({ error: message });
+  }
+});
+
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const result = await verifySignInOtp({
+      database: db,
+      otpProvider,
+      challengeId: String(req.body?.challengeId || ''),
+      mobile: String(req.body?.mobile || ''),
+      code: String(req.body?.code || ''),
+    });
+    const user = db.prepare(`SELECT users.*, tenants.name AS tenant_name FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?`).get(result.userId);
+    addAudit({ tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.login', detail: 'Signed in with a verified mobile OTP.' });
+    return res.json({ token: result.token, user: apiUser(user) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'OTP verification failed.';
+    const status = /unavailable/i.test(message) ? 503 : 401;
+    return res.status(status).json({ error: status === 401 ? 'The OTP is invalid, expired, or already used.' : message });
+  }
 });
 
 app.get('/api/me', auth, (req, res) => res.json({ user: req.user }));
+
+app.post('/api/auth/logout', auth, (req, res) => {
+  db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE id = ?').run(isoNow(), req.sessionId);
+  addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'auth.logout', detail: 'Signed out and revoked the active session.' });
+  res.status(204).end();
+});
 
 app.get('/api/workspace', auth, (req, res) => {
   const agentScope = req.user.role === 'agent' ? ' AND assigned_agent_user_id = ?' : '';
@@ -148,19 +191,37 @@ app.get('/api/workspace', auth, (req, res) => {
   res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map(mapReleasePass) });
 });
 
-app.post('/api/cases/import-demo', auth, requireRoles(...financeRoles), (req, res) => {
-  const total = db.prepare('SELECT COUNT(*) AS count FROM recovery_cases WHERE tenant_id = ?').get(req.user.tenantId).count;
-  const number = 260900 + total;
-  const id = `RC-${number}`;
-  const createdAt = isoNow();
-  db.prepare(`INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, payment_cleared) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Imported', ?, 0)`).run(id, req.user.tenantId, `LN-${number}`, 'Imported account — verify data', '+91 —', 'Pending finance verification', 'PENDING REVIEW', 'Vehicle information pending', 'Pending chassis verification', '2-wheeler', 'Unassigned', 0, 0, createdAt);
-  addAudit({ tenantId: req.user.tenantId, caseId: id, actorUserId: req.user.id, action: 'case.imported', detail: 'A demonstration imported record was added.' });
-  addNotification({ tenantId: req.user.tenantId, title: 'Monthly file imported', detail: `${id} is available for finance-team review.`, tone: 'blue' });
-  const row = db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(id, req.user.tenantId);
-  res.status(201).json({ case: mapCase(row) });
+app.post('/api/imports/monthly', auth, requirePermission(PERMISSIONS.IMPORT_MANAGE), monthlyImportUpload.single('file'), async (req, res, next) => {
+  if (!req.file) return res.status(422).json({ error: 'Upload one CSV or XLSX file.' });
+  const snapshotMonth = String(req.body?.snapshotMonth || '');
+  if (!/^\d{4}-(?:0[1-9]|1[0-2])-01$/.test(snapshotMonth)) return res.status(422).json({ error: 'Choose a valid loan cycle month.' });
+  let normalized;
+  try {
+    normalized = normalizeImportRows(await parseImportFile({ originalName: req.file.originalname, buffer: req.file.buffer }));
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The monthly file could not be read.' });
+  }
+  if (!normalized.valid.length) return res.status(422).json({ error: 'No valid accounts were found in the file.', errors: normalized.errors });
+  try {
+    const result = importMonthlyRows({
+      database: db,
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      snapshotMonth,
+      fileName: req.file.originalname,
+      fileSha256: createHash('sha256').update(req.file.buffer).digest('hex'),
+      rows: normalized.valid,
+      rejectedRows: normalized.errors.length,
+    });
+    addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'import.completed', detail: `${req.file.originalname}: ${result.accepted} accepted, ${result.rejected} rejected.` });
+    addNotification({ tenantId: req.user.tenantId, title: result.duplicate ? 'Monthly file already imported' : 'Monthly file imported', detail: `${result.accepted} account${result.accepted === 1 ? '' : 's'} processed for ${snapshotMonth.slice(0, 7)}.`, tone: result.rejected ? 'amber' : 'blue' });
+    return res.status(result.duplicate ? 200 : 201).json({ result, errors: normalized.errors });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-app.post('/api/cases/:id/authority-approval', auth, requireRoles(...financeRoles), (req, res, next) => {
+app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSIONS.AUTHORITY_APPROVE), (req, res, next) => {
   const caseRow = caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
   const error = validateCaseAction('approve_authority', caseRow, { hasDocument: true });
@@ -182,7 +243,7 @@ app.post('/api/cases/:id/authority-approval', auth, requireRoles(...financeRoles
   return res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(req.recoveryCase.id, req.user.tenantId)) });
 });
 
-app.put('/api/cases/:id/assignment', auth, requireRoles(...financeRoles), (req, res) => {
+app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   const agentId = String(req.body?.agentId || '');
   const agent = db.prepare(`SELECT * FROM users WHERE id = ? AND tenant_id = ? AND role = 'agent' AND active = 1`).get(agentId, req.user.tenantId);
@@ -197,7 +258,7 @@ app.put('/api/cases/:id/assignment', auth, requireRoles(...financeRoles), (req, 
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 
-app.post('/api/cases/:id/attempt', auth, requireRoles('agent'), (req, res) => {
+app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_SUBMIT), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   const reason = String(req.body?.reason || 'Other');
   const note = String(req.body?.note || '').trim();
@@ -213,7 +274,7 @@ app.post('/api/cases/:id/attempt', auth, requireRoles('agent'), (req, res) => {
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 
-app.post('/api/cases/:id/evidence', auth, requireRoles('agent'), requireAssignedCase, upload.array('files', 5), (req, res) => {
+app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, upload.array('files', 5), (req, res) => {
   const files = req.files ?? [];
   if (!files.length) return res.status(422).json({ error: 'Capture at least one photo or video before uploading.' });
   const latitude = Number(req.body?.latitude);
@@ -242,7 +303,7 @@ app.get('/api/evidence/:id/file', auth, (req, res) => {
   res.type(evidence.mime_type).sendFile(join(uploadDirectory, evidence.file_name));
 });
 
-app.post('/api/cases/:id/custody', auth, requireRoles('agent'), (req, res) => {
+app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   const yardName = String(req.body?.yardName || '').trim();
   const arrivalTime = String(req.body?.arrivalTime || '').trim();
@@ -265,7 +326,7 @@ app.post('/api/cases/:id/custody', auth, requireRoles('agent'), (req, res) => {
   res.status(201).json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)), custody: mapCustody(db.prepare('SELECT * FROM custody_records WHERE id = ?').get(id)) });
 });
 
-app.post('/api/cases/:id/custody-review', auth, requireRoles(...financeRoles), (req, res) => {
+app.post('/api/cases/:id/custody-review', auth, requirePermission(PERMISSIONS.CUSTODY_REVIEW), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
   const actionError = validateCaseAction('approve_custody', caseRow);
@@ -283,7 +344,7 @@ app.post('/api/cases/:id/custody-review', auth, requireRoles(...financeRoles), (
   return res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(caseRow.id, req.user.tenantId)) });
 });
 
-app.post('/api/cases/:id/payment-confirmation', auth, requireRoles(...financeRoles), (req, res) => {
+app.post('/api/cases/:id/payment-confirmation', auth, requirePermission(PERMISSIONS.PAYMENT_CONFIRM), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   const reference = String(req.body?.reference || '').trim();
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
@@ -297,7 +358,7 @@ app.post('/api/cases/:id/payment-confirmation', auth, requireRoles(...financeRol
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 
-app.post('/api/cases/:id/release-pass', auth, requireRoles(...financeRoles), (req, res) => {
+app.post('/api/cases/:id/release-pass', auth, requirePermission(PERMISSIONS.RELEASE_ISSUE), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
   const actionError = validateCaseAction('issue_release', caseRow);
@@ -316,7 +377,7 @@ app.post('/api/cases/:id/release-pass', auth, requireRoles(...financeRoles), (re
   res.json({ case: mapCase(updatedCase), releasePass: mapReleasePass(releasePass) });
 });
 
-app.post('/api/cases/:id/close', auth, requireRoles(...financeRoles), (req, res) => {
+app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLOSE), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
   const actionError = validateCaseAction('close', caseRow);
@@ -338,6 +399,7 @@ if (existsSync(distDirectory)) {
 }
 
 app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) return res.status(422).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'The uploaded file must be 10 MB or smaller.' : 'The upload could not be accepted.' });
   console.error(error);
   res.status(500).json({ error: 'Unexpected server error.' });
 });

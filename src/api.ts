@@ -7,6 +7,7 @@ export interface SessionUser {
   tenantId: string;
   tenantName: string;
   role: UserRole;
+  permissions: string[];
   name: string;
   email: string;
   mobile: string | null;
@@ -18,12 +19,32 @@ export interface Session {
   user: SessionUser;
 }
 
+export interface OtpChallenge {
+  challengeId: string;
+  expiresAt: string;
+  developmentCode?: string;
+}
+
 export interface Workspace {
   cases: RecoveryCase[];
   custody: CustodyRecord[];
   agents: Agent[];
   notifications: AppNotification[];
   releasePasses: ReleasePass[];
+}
+
+export interface ImportResult {
+  batchId: string;
+  accepted: number;
+  rejected: number;
+  created: number;
+  updated: number;
+  duplicate: boolean;
+}
+
+export interface ImportError {
+  row: number;
+  message: string;
 }
 
 const sessionKey = 'handoff-session';
@@ -62,10 +83,17 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
 }
 
 export const api = {
-  login: (email: string, password: string) => request<Session>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  requestOtp: (mobile: string) => request<OtpChallenge>('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
+  verifyOtp: (mobile: string, code: string, challengeId: string) => request<Session>('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
+  logout: (token: string) => request<void>('/api/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<{ user: SessionUser }>('/api/me', {}, token),
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),
-  importDemoCase: (token: string) => request<{ case: RecoveryCase }>('/api/cases/import-demo', { method: 'POST' }, token),
+  importMonthly: (token: string, file: File, snapshotMonth: string) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('snapshotMonth', snapshotMonth);
+    return request<{ result: ImportResult; errors: ImportError[] }>('/api/imports/monthly', { method: 'POST', body }, token);
+  },
   approveAuthority: (token: string, caseId: string, document: File) => {
     const body = new FormData();
     body.append('document', document);
