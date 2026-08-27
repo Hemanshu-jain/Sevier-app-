@@ -1,0 +1,17 @@
+{
+  "name": "Handoff Field",
+  "short_name": "Handoff",
+  "description": "Secure recovery work orders for authorized field agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f8fc",
+  "theme_color": "#102c51",
+  "icons": [
+    {
+      "src": "/handoff-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A compliance-first vehicle recovery case-management prototype." />
+    <title>Recoverly — Case Operations</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <a class="brand" href="#dashboard" aria-label="Recoverly home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>recoverly</span>
+        </a>
+
+        <nav class="nav-list">
+          <a class="nav-item active" href="#dashboard" data-section="dashboard"><span class="nav-icon">▦</span>Overview</a>
+          <a class="nav-item" href="#delinquencies" data-section="delinquencies"><span class="nav-icon">□</span>Monthly register <span class="nav-count" id="caseCount">24</span></a>
+          <a class="nav-item" href="#assignments" data-section="assignments"><span class="nav-icon">⌘</span>Field assignments</a>
+          <a class="nav-item" href="#tokens" data-section="tokens"><span class="nav-icon">◇</span>Custody tokens</a>
+          <a class="nav-item" href="#releases" data-section="releases"><span class="nav-icon">ↄ</span>Release desk</a>
+          <a class="nav-item" href="#reports" data-section="reports"><span class="nav-icon">◫</span>Reports</a>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="compliance-card">
+            <span class="status-dot"></span>
+            <div>
+              <strong>Compliance mode</strong>
+              <span>All checks enabled</span>
+            </div>
+          </div>
+          <a class="nav-item" href="#settings" data-section="settings"><span class="nav-icon">⚙</span>Settings</a>
+          <button class="profile" id="profileButton" aria-label="Open profile menu">
+            <span class="avatar">AM</span>
+            <span><strong>Alex Morgan</strong><small>Operations lead</small></span>
+            <span class="chevron">⌄</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button class="menu-button" id="menuButton" aria-label="Open navigation">☰</button>
+          <div class="page-intro">
+            <p class="eyebrow">Tuesday, August 4</p>
+            <h1 id="pageTitle">Good morning, Alex</h1>
+          </div>
+          <div class="top-actions">
+            <label class="search" for="searchCases">
+              <span aria-hidden="true">⌕</span>
+              <input id="searchCases" type="search" placeholder="Search cases, people, VIN..." autocomplete="off" />
+              <kbd>⌘ K</kbd>
+            </label>
+            <button class="icon-button" aria-label="View notifications"><span>♧</span><b></b></button>
+            <button class="primary-button" id="newCaseButton"><span>＋</span> New case</button>
+          </div>
+        </header>
+
+        <section class="workspace app-page" id="dashboard">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Operations at a glance</p>
+              <h2>Recovery dashboard</h2>
+            </div>
+            <button class="date-filter" id="dateFilter">Last 30 days <span>⌄</span></button>
+          </div>
+
+          <section class="lifecycle-panel" aria-labelledby="lifecycleTitle">
+            <div class="lifecycle-heading">
+              <div><p class="eyebrow">End-to-end workflow</p><h3 id="lifecycleTitle">Recovery lifecycle</h3></div>
+              <span>Every change is recorded in the case audit trail</span>
+            </div>
+            <ol class="lifecycle-steps">
+              <li class="complete"><span>1</span><div><strong>Monthly register</strong><small>Identify overdue accounts</small></div></li>
+              <li class="complete"><span>2</span><div><strong>Compliance review</strong><small>Check notice and authority</small></div></li>
+              <li class="active"><span>3</span><div><strong>Field assignment</strong><small>Send verified work order</small></div></li>
+              <li><span>4</span><div><strong>Custody token</strong><small>Record recovery and evidence</small></div></li>
+              <li><span>5</span><div><strong>Payment & release</strong><small>Verify clearance and release</small></div></li>
+            </ol>
+          </section>
+
+          <section class="metric-grid" aria-label="Case metrics">
+            <article class="metric-card">
+              <div class="metric-top"><span class="metric-icon soft-blue">▤</span><span class="trend up">↗ 12.5%</span></div>
+              <p>Active cases</p>
+              <strong id="activeCaseMetric">24</strong>
+              <small>4 added this week</small>
+            </article>
+            <article class="metric-card">
+              <div class="metric-top"><span class="metric-icon soft-amber">◷</span><span class="trend neutral">Due today</span></div>
+              <p>Compliance reviews</p>
+              <strong id="reviewMetric">7</strong>
+              <small>Require action before assignment</small>
+            </article>
+            <article class="metric-card">
+              <div class="metric-top"><span class="metric-icon soft-green">✓</span><span class="trend up">↗ 8.2%</span></div>
+              <p>Resolved this month</p>
+              <strong>18</strong>
+              <small>75% returned or resolved</small>
+            </article>
+            <article class="metric-card alert-card">
+              <div class="metric-top"><span class="metric-icon soft-red">!</span><span class="trend critical">Attention</span></div>
+              <p>Notice deadlines</p>
+              <strong id="deadlineMetric">3</strong>
+              <small>Within the next 48 hours</small>
+            </article>
+          </section>
+
+          <section class="dashboard-grid">
+            <article class="panel case-panel" id="cases">
+              <div class="panel-header">
+                <div>
+                  <h3>Priority cases</h3>
+                  <p>Cases that need a decision or follow-up</p>
+                </div>
+                <button class="text-button" id="viewAllButton">View all <span>→</span></button>
+              </div>
+              <div class="filter-row" role="group" aria-label="Filter cases">
+                <button class="filter-chip selected" data-filter="all">All <span id="allFilterCount">24</span></button>
+                <button class="filter-chip" data-filter="review">Needs review <span id="reviewFilterCount">7</span></button>
+                <button class="filter-chip" data-filter="assigned">Assigned</button>
+                <button class="filter-chip" data-filter="notice">Notice due</button>
+              </div>
+              <div class="case-list" id="caseList" aria-live="polite"></div>
+            </article>
+
+            <div class="side-panels">
+              <article class="panel activity-panel">
+                <div class="panel-header compact">
+                  <div><h3>Recent activity</h3><p>Latest updates across your team</p></div>
+                  <button class="more-button" aria-label="More activity options">•••</button>
+                </div>
+                <ol class="activity-list">
+                  <li><span class="activity-icon green">✓</span><div><p><strong>Case RP-2041</strong> cleared pre-recovery review</p><small>12 min ago · Priya S.</small></div></li>
+                  <li><span class="activity-icon blue">✉</span><div><p>Right-to-cure notice queued for <strong>RP-2038</strong></p><small>48 min ago · System</small></div></li>
+                  <li><span class="activity-icon amber">⌘</span><div><p><strong>Orbit Recovery</strong> accepted a new assignment</p><small>1 hr ago · Marco L.</small></div></li>
+                  <li><span class="activity-icon red">!</span><div><p>Insurance verification expired on <strong>RP-2029</strong></p><small>2 hrs ago · System</small></div></li>
+                </ol>
+                <button class="full-width-link">View activity log <span>→</span></button>
+              </article>
+
+              <article class="panel guardrail-panel">
+                <span class="guardrail-icon">⌑</span>
+                <div>
+                  <p class="eyebrow">Compliance guardrail</p>
+                  <h3>Assignment is blocked until every required check passes.</h3>
+                  <button id="reviewChecksButton">Review pending checks <span>→</span></button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="compliance-note" aria-label="Legal notice">
+            <span>⚖</span>
+            <p><strong>Designed for compliant operations.</strong> Required notices, timelines, and recovery rules vary by jurisdiction and contract. Configure them with qualified legal and compliance teams.</p>
+            <button aria-label="Dismiss notice" id="dismissLegalNote">×</button>
+          </section>
+        </section>
+
+        <section class="app-page workflow-page" id="delinquencies" hidden>
+          <div class="page-heading"><div><p class="eyebrow">August 2026 cycle</p><h2>Monthly delinquency register</h2><p>Accounts imported for review before any field assignment.</p></div><div class="page-actions"><button class="secondary-button" id="exportRegisterButton">Export register</button><button class="primary-button" id="importRegisterButton"><span>＋</span> Import monthly file</button></div></div>
+          <section class="register-summary"><div><strong>24</strong><span>accounts in this monthly register</span></div><div><strong>₹18.4L</strong><span>total pending across visible accounts</span></div><div><strong>7</strong><span>awaiting compliance review</span></div><p>Only personnel with the appropriate role can view borrower contact details.</p></section>
+          <article class="data-panel"><div class="data-panel-header"><div><h3>Accounts requiring review</h3><p>Name, contact, vehicle, registration and current pending balance.</p></div><label class="table-search"><span>⌕</span><input id="registerSearch" placeholder="Filter register" /></label></div><div class="table-wrap"><table><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration no.</th><th>Pending amount</th><th>Review status</th><th></th></tr></thead><tbody id="registerTable"></tbody></table></div></article>
+          <aside class="legal-inline"><span>⚖</span><p><strong>Before an assignment:</strong> validate account status, contract rights, notices, jurisdiction rules, and the recovery partner’s authorization.</p></aside>
+        </section>
+
+        <section class="app-page workflow-page" id="assignments" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Authorized device inbox</p><h2>Field assignments</h2><p>Only approved work orders appear in the recovery partner’s mobile app.</p></div><button class="primary-button" id="newAssignmentButton"><span>＋</span> Create assignment</button></div>
+          <section class="assignment-layout"><article class="data-panel assignment-panel"><div class="data-panel-header"><div><h3>Approved work orders</h3><p>These have passed the prerequisite review.</p></div><span class="verified-label">● Verified authority</span></div><div class="assignment-list" id="assignmentList"></div></article><article class="field-preview"><div class="phone"><div class="phone-top"></div><p class="field-brand">recoverly field</p><span class="field-chip">AUTHORIZED ASSIGNMENT</span><h3>RP-2034</h3><p class="field-vehicle">2023 Honda CR-V EX</p><div class="field-meta"><span>Registration</span><strong>KA 01 MN 4821</strong><span>Authority expiry</span><strong>Aug 08, 2026 · 18:00</strong></div><div class="field-warning">Do not proceed if authority is expired, the vehicle does not match, or a breach-of-peace risk exists.</div><button>Open approved work order</button></div><p>Field view: limited to the assigned case and shows mandatory stop conditions.</p></article></section>
+        </section>
+
+        <section class="app-page workflow-page" id="tokens" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Secure chain of custody</p><h2>Custody tokens</h2><p>Evidence-backed records created only after an authorized recovery is reported.</p></div><button class="primary-button" id="createTokenButton"><span>＋</span> Record custody</button></div>
+          <section class="token-layout"><article class="data-panel"><div class="data-panel-header"><div><h3>Issued custody tokens</h3><p>Each token links the work order, vehicle condition and client notification.</p></div><span class="token-count" id="tokenCount">3 active</span></div><div class="token-list" id="tokenList"></div></article><aside class="token-explainer"><span class="token-emblem">◇</span><p class="eyebrow">What a token proves</p><h3>A custody token is a traceable receipt—not authority to recover.</h3><ul><li>Links to approved work order</li><li>Captures vehicle condition and photo evidence</li><li>Notifies the finance client</li><li>Must be verified before release</li></ul></aside></section>
+        </section>
+
+        <section class="app-page workflow-page" id="releases" hidden>
+          <div class="page-heading"><div><p class="eyebrow">Clearance and customer handover</p><h2>Release desk</h2><p>Payment clearance and the original custody token are verified before a vehicle can leave storage.</p></div><button class="secondary-button" id="releaseAuditButton">View release audit</button></div>
+          <article class="data-panel"><div class="data-panel-header"><div><h3>Vehicles awaiting release</h3><p>Release is blocked until the finance client clears payment and the token is verified.</p></div><span class="blocked-label">● Controlled handover</span></div><div class="table-wrap"><table><thead><tr><th>Customer</th><th>Vehicle / registration</th><th>Payment clearance</th><th>Custody token</th><th>Storage location</th><th></th></tr></thead><tbody id="releaseTable"></tbody></table></div></article>
+          <section class="release-flow"><span>1. Client clears balance</span><b>→</b><span>2. Customer presents custody token</span><b>→</b><span>3. Storage verifies both</span><b>→</b><span>4. Vehicle released & audit recorded</span></section>
+        </section>
+
+        <section class="app-page placeholder-section" id="reports" hidden><h2>Reports</h2><p>Monitor case trends, recovery outcomes, and compliance service levels.</p></section>
+        <section class="app-page placeholder-section" id="settings" hidden><h2>Settings</h2><p>Configure organization preferences and rule sets.</p></section>
+      </main>
+    </div>
+
+    <dialog class="case-dialog" id="caseDialog">
+      <form method="dialog" id="newCaseForm">
+        <div class="dialog-heading"><div><p class="eyebrow">New recovery case</p><h2>Add a case</h2></div><button class="close-dialog" value="cancel" aria-label="Close">×</button></div>
+        <p class="dialog-note">This prototype does not initiate a recovery action. Confirm jurisdiction-specific notice and authorization requirements before assignment.</p>
+        <div class="form-grid">
+          <label>Borrower or customer<input required name="customer" placeholder="e.g. Jordan Williams" /></label>
+          <label>Case reference<input required name="reference" placeholder="e.g. RP-2048" pattern="RP-[0-9]{4}" title="Use RP- followed by four digits" /></label>
+          <label class="full">Vehicle<input required name="vehicle" placeholder="Year, make and model" /></label>
+          <label>Jurisdiction<select required name="jurisdiction"><option value="">Select jurisdiction</option><option>California</option><option>New York</option><option>Texas</option><option>Other / pending review</option></select></label>
+          <label>Initial status<select name="status"><option value="review">Needs compliance review</option><option value="notice">Notice required</option></select></label>
+        </div>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" value="default">Create case</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="case-dialog" id="tokenDialog">
+      <form method="dialog" id="tokenForm">
+        <div class="dialog-heading"><div><p class="eyebrow">Authorized field report</p><h2>Record vehicle custody</h2></div><button class="close-dialog" value="cancel" aria-label="Close">×</button></div>
+        <p class="dialog-note">Record this only after confirming the approved work order, matching vehicle, safe conditions, and required evidence. This form cannot create recovery authority.</p>
+        <div class="form-grid"><label class="full">Approved case<select required name="case"><option value="">Choose an authorized assignment</option><option value="RP-2034|Sarah Chen|2023 Honda CR-V EX|KA 01 MN 4821">RP-2034 — Sarah Chen · 2023 Honda CR-V EX</option><option value="RP-2025|Amir Patel|2022 Hyundai Tucson SEL|KA 03 KL 7654">RP-2025 — Amir Patel · 2022 Hyundai Tucson SEL</option></select></label><label>Recovery partner<select required name="partner"><option>Orbit Recovery</option><option>SecureTow Services</option></select></label><label>Storage location<input required name="storage" required placeholder="Approved storage yard" /></label><label class="full">Condition / handover note<input required name="note" required placeholder="Record observed condition and time" /></label><label class="full">Vehicle photo evidence<input required name="photo" type="file" accept="image/*" capture="environment" required /></label></div>
+        <label class="checkline"><input type="checkbox" required /> I confirm this is an authorized, safety-compliant custody report.</label><div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" value="default">Create custody token</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="case-dialog" id="releaseDialog">
+      <form method="dialog" id="releaseForm">
+        <div class="dialog-heading"><div><p class="eyebrow">Controlled handover</p><h2>Verify release</h2></div><button class="close-dialog" value="cancel" aria-label="Close">×</button></div>
+        <p class="dialog-note">Confirm client payment clearance and match the customer’s custody token before authorizing release. The completion is recorded in the audit trail.</p>
+        <input type="hidden" name="releaseId" id="releaseId" />
+        <div class="release-card"><span class="token-emblem">◇</span><div><small>Custody token</small><strong id="releaseTokenCode">—</strong><p id="releaseVehicle">—</p></div><span class="payment-good">Payment cleared</span></div>
+        <label class="checkline"><input type="checkbox" required /> I verified the token, identity, payment clearance, and storage handover requirements.</label><div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" value="default">Authorize release</button></div>
+      </form>
+    </dialog>
+
+    <aside class="toast" id="toast" role="status" aria-live="polite"></aside>
+    <script src="app.js"></script>
+  </body>
+</html>
