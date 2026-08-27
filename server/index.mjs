@@ -74,6 +74,7 @@ function mapCase(row) {
     status: row.status,
     assignedAgentId: row.assigned_agent_user_id ?? undefined,
     assignedAt: row.assigned_at ?? undefined,
+    assignmentNote: row.assignment_note ?? undefined,
     updatedAt: row.updated_at,
     custodyId: row.custody_id ?? undefined,
     failure: row.failure_reason ? { reason: row.failure_reason, note: row.failure_note, recordedAt: row.failure_recorded_at } : undefined,
@@ -347,15 +348,16 @@ app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSION
 app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), (req, res) => {
   const caseRow = caseForUser(req.params.id, req.user);
   const agentId = String(req.body?.agentId || '');
+  const assignmentNote = String(req.body?.assignmentNote || '').trim();
   const agent = db.prepare(`SELECT * FROM users WHERE id = ? AND tenant_id = ? AND role = 'agent' AND active = 1`).get(agentId, req.user.tenantId);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
-  const actionError = validateCaseAction('assign', caseRow);
+  const actionError = validateCaseAction('assign', caseRow, { assignmentNote });
   if (actionError) return res.status(422).json({ error: actionError });
   if (!agent) return res.status(422).json({ error: 'Choose an active agent from this finance company.' });
   const updatedAt = isoNow();
-  db.prepare(`UPDATE recovery_cases SET status = 'Assigned', assigned_agent_user_id = ?, assigned_at = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL WHERE id = ? AND tenant_id = ?`).run(agent.id, updatedAt, updatedAt, caseRow.id, req.user.tenantId);
+  db.prepare(`UPDATE recovery_cases SET status = 'Assigned', assigned_agent_user_id = ?, assigned_at = ?, assignment_note = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL WHERE id = ? AND tenant_id = ?`).run(agent.id, updatedAt, assignmentNote || null, updatedAt, caseRow.id, req.user.tenantId);
   addNotification({ tenantId: req.user.tenantId, recipientUserId: agent.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
-  addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agent.name}.` });
+  addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agent.name}.${assignmentNote ? ` Instruction: ${assignmentNote}` : ''}` });
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 

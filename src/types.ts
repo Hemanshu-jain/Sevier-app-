@@ -41,6 +41,7 @@ export interface RecoveryCase {
   status: CaseStatus;
   assignedAgentId?: string;
   assignedAt?: string;
+  assignmentNote?: string;
   updatedAt: string;
   custodyId?: string;
   failure?: { reason: AttemptReason; note: string; recordedAt: string };

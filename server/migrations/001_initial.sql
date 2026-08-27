@@ -189,6 +189,7 @@ CREATE TABLE case_assignments (
   agent_membership_id UUID NOT NULL,
   assigned_by_membership_id UUID NOT NULL,
   status TEXT NOT NULL DEFAULT 'offered' CHECK (status IN ('offered', 'accepted', 'declined', 'revoked')),
+  instruction_note TEXT,
   decline_reason TEXT,
   assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   responded_at TIMESTAMPTZ,

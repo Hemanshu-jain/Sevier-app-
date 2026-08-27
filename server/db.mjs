@@ -138,6 +138,7 @@ if (!caseColumns.includes('authority_document_byte_size')) db.exec('ALTER TABLE 
 if (!caseColumns.includes('authority_document_sha256')) db.exec('ALTER TABLE recovery_cases ADD COLUMN authority_document_sha256 TEXT');
 if (!caseColumns.includes('authority_approved_at')) db.exec('ALTER TABLE recovery_cases ADD COLUMN authority_approved_at TEXT');
 if (!caseColumns.includes('authority_approved_by_user_id')) db.exec('ALTER TABLE recovery_cases ADD COLUMN authority_approved_by_user_id TEXT REFERENCES users(id)');
+if (!caseColumns.includes('assignment_note')) db.exec('ALTER TABLE recovery_cases ADD COLUMN assignment_note TEXT');
 
 const currentCustodyColumns = db.prepare('PRAGMA table_info(custody_records)').all().map((column) => column.name);
 if (!currentCustodyColumns.includes('finance_reviewed_at')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_reviewed_at TEXT');
@@ -253,6 +254,7 @@ db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, 
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('005-finance-approval-gates', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('006-otp-sessions', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('007-monthly-import-snapshots', now());
+db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('008-assignment-notes', now());
 
 function backupFileName() {
   return `seizer-${new Date().toISOString().slice(0, 10)}.db`;

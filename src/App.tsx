@@ -186,11 +186,12 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     if (!selectedCase) return;
     const formData = new FormData(event.currentTarget);
     const selectedAgentId = String(formData.get('agentId'));
+    const assignmentNote = String(formData.get('assignmentNote') || '');
     const selectedAgent = agentList.find((item) => item.id === selectedAgentId);
     if (!selectedAgent) return;
     try {
       setActionError('');
-      await api.assignCase(session.token, selectedCase.id, selectedAgent.id);
+      await api.assignCase(session.token, selectedCase.id, selectedAgent.id, assignmentNote);
       await loadWorkspace();
       setDialog(null);
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to assign this case.'); }
@@ -515,7 +516,7 @@ function MemberDialog({ session, onClose, onSubmit }: { session: Session; onClos
 }
 
 function AssignDialog({ caseItem, agentList, onClose, onSubmit }: { caseItem: RecoveryCase; agentList: Agent[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <Modal title="Assign seizure agent" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">The selected independent agent will receive the full assigned-case information and an in-app notification.</p><div className="case-reference"><strong>{caseItem.id}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="field-label">Select agent<select name="agentId" required defaultValue=""><option value="" disabled>Choose an active agent</option>{agentList.filter((agent) => agent.status === 'Active').map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.city} · {agent.activeCases} active cases</option>)}</select></label><label className="field-label">Assignment note<textarea name="assignmentNote" placeholder="Optional instruction for the assigned agent" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Send work order</button></div></form></Modal>;
+  return <Modal title="Assign seizure agent" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">The selected independent agent will receive the full assigned-case information and an in-app notification.</p><div className="case-reference"><strong>{caseItem.id}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="field-label">Select agent<select name="agentId" required defaultValue=""><option value="" disabled>Choose an active agent</option>{agentList.filter((agent) => agent.status === 'Active').map((agent) => <option value={agent.id} key={agent.id}>{agent.name} · {agent.city} · {agent.activeCases} active cases</option>)}</select></label><label className="field-label">Assignment note<textarea name="assignmentNote" maxLength={2000} defaultValue={caseItem.assignmentNote} placeholder="Optional instruction for the assigned agent" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit">Send work order</button></div></form></Modal>;
 }
 
 function AuthorityDialog({ caseItem, onClose, onSubmit }: { caseItem: RecoveryCase; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

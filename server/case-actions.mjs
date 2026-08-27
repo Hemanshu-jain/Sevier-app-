@@ -5,6 +5,7 @@ export function validateCaseAction(action, recoveryCase, context = {}) {
       return context.hasDocument ? null : 'An authority document is required.';
     case 'assign':
       if (!recoveryCase.authority_approved_at) return 'Approve and attach the authority document before assignment.';
+      if (String(context.assignmentNote || '').length > 2000) return 'The assignment note must be 2,000 characters or fewer.';
       return ['Imported', 'Unable to recover'].includes(recoveryCase.status) ? null : 'This case is not ready for assignment.';
     case 'approve_custody':
       return recoveryCase.status === 'Custody review' ? null : 'A submitted custody report is required.';

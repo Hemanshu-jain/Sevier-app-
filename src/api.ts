@@ -126,7 +126,7 @@ export const api = {
     body.append('document', document);
     return request<{ case: RecoveryCase }>(`/api/cases/${caseId}/authority-approval`, { method: 'POST', body }, token);
   },
-  assignCase: (token: string, caseId: string, agentId: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentId }) }, token),
+  assignCase: (token: string, caseId: string, agentId: string, assignmentNote: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentId, assignmentNote }) }, token),
   recordAttempt: (token: string, caseId: string, reason: string, note: string, location?: { latitude: number; longitude: number }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/attempt`, { method: 'POST', body: JSON.stringify({ reason, note, ...location }) }, token),
   recordCustody: (token: string, caseId: string, values: { yardName: string; arrivalTime: string; parkingRate: number; checklist: number; inspection: Record<string, string>; latitude?: number; longitude?: number }) => request<{ case: RecoveryCase; custody: CustodyRecord }>(`/api/cases/${caseId}/custody`, { method: 'POST', body: JSON.stringify(values) }, token),
   approveCustody: (token: string, caseId: string, note: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/custody-review`, { method: 'POST', body: JSON.stringify({ note }) }, token),

@@ -6,6 +6,7 @@ test('assignment requires finance authority approval', () => {
   const imported = { status: 'Imported', authority_approved_at: null };
   assert.match(validateCaseAction('assign', imported), /authority document/i);
   assert.equal(validateCaseAction('assign', { ...imported, authority_approved_at: '2026-08-27T10:00:00Z' }), null);
+  assert.match(validateCaseAction('assign', { ...imported, authority_approved_at: '2026-08-27T10:00:00Z' }, { assignmentNote: 'x'.repeat(2001) }), /2,000/);
 });
 
 test('authority approval requires an imported case and a document', () => {

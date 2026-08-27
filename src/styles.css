@@ -4,6 +4,7 @@
 .agent-card-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}.agent-card-actions .agent-case-link,.agent-card-actions .text-button{margin-top:0}.agent-card-actions .text-button:disabled{color:#a7b0bc;cursor:not-allowed}
 .edit-account{margin-top:10px}
 .status-filter{display:flex;align-items:center;gap:8px;color:#718197;font-size:10px;font-weight:800}.status-filter select{height:34px;border:1px solid #dce4ed;border-radius:6px;background:#fff;color:#40546e;padding:0 9px;font-size:10px}
+.field-instruction{display:flex;gap:8px;margin-top:11px;padding:10px;border:1px solid #d7e4f6;border-radius:8px;background:#f4f8ff;color:#315f9f}.field-instruction svg{flex:none}.field-instruction strong{font-size:10px}.field-instruction p{margin:2px 0 0;font-size:9px;line-height:1.5;color:#5f7591;white-space:pre-wrap}
 
 :root { --navy:#102c51; --navy-2:#193b68; --ink:#17283d; --muted:#718197; --line:#e6ebf1; --page:#f6f8fb; --blue:#276be7; --blue-soft:#eaf1ff; --green:#168260; --green-soft:#e5f6ef; --amber:#a35f0c; --amber-soft:#fff3df; --red:#be4e4b; --red-soft:#fff0ee; --violet:#7656c9; --violet-soft:#f0ecff; --shadow:0 12px 30px rgba(22,45,76,.055); }
 * { box-sizing:border-box; }
