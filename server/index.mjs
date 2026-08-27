@@ -19,6 +19,7 @@ import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive } from './agent-management.mjs';
 import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
+import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -256,6 +257,33 @@ app.get('/api/audit-events', auth, requirePermission(PERMISSIONS.AUDIT_VIEW), (r
     FROM audit_events JOIN users ON users.id = audit_events.actor_user_id
     WHERE audit_events.tenant_id = ? ORDER BY audit_events.created_at DESC LIMIT 100`).all(req.user.tenantId);
   res.json({ events: events.map((event) => ({ id: event.id, caseId: event.case_id, actorName: event.actor_name, action: event.action, detail: event.detail, createdAt: event.created_at })) });
+});
+
+app.get('/api/members', auth, requirePermission(PERMISSIONS.MEMBER_MANAGE), (req, res) => {
+  const members = db.prepare("SELECT id, name, mobile, city, role, active FROM users WHERE tenant_id = ? AND role <> 'agent' ORDER BY role, name").all(req.user.tenantId);
+  res.json({ members: members.map((member) => ({ id: member.id, name: member.name, mobile: member.mobile, city: member.city, role: member.role, active: Boolean(member.active) })) });
+});
+
+app.post('/api/members', auth, requirePermission(PERMISSIONS.MEMBER_MANAGE), (req, res) => {
+  try {
+    const member = createFinanceMember({ database: db, tenantId: req.user.tenantId, actorRole: req.user.role, values: req.body ?? {} });
+    addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'member.created', detail: `${member.name} was added as ${member.role.replace('_', ' ')}.` });
+    return res.status(201).json({ member });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The finance user could not be added.' });
+  }
+});
+
+app.put('/api/members/:id/status', auth, requirePermission(PERMISSIONS.MEMBER_MANAGE), (req, res) => {
+  if (typeof req.body?.active !== 'boolean') return res.status(422).json({ error: 'Choose an active or suspended status.' });
+  try {
+    const member = setFinanceMemberActive({ database: db, tenantId: req.user.tenantId, actorUserId: req.user.id, actorRole: req.user.role, memberId: req.params.id, active: req.body.active });
+    addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: member.active ? 'member.reactivated' : 'member.suspended', detail: `${member.name} was ${member.active ? 'reactivated' : 'suspended'}.` });
+    return res.json({ member });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The finance user status could not be changed.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
 });
 
 app.post('/api/imports/monthly', auth, requirePermission(PERMISSIONS.IMPORT_MANAGE), monthlyImportUpload.single('file'), async (req, res, next) => {

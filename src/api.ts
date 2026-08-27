@@ -1,4 +1,4 @@
-import type { Agent, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent';
 
@@ -107,6 +107,9 @@ export const api = {
   createAccount: (token: string, values: AccountInput) => request<{ case: RecoveryCase }>('/api/accounts', { method: 'POST', body: JSON.stringify(values) }, token),
   updateAccount: (token: string, caseId: string, values: AccountInput) => request<{ case: RecoveryCase }>(`/api/accounts/${caseId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
   auditEvents: (token: string) => request<{ events: AuditEvent[] }>('/api/audit-events', {}, token),
+  members: (token: string) => request<{ members: FinanceMember[] }>('/api/members', {}, token),
+  createMember: (token: string, values: { name: string; mobile: string; city: string; role: string }) => request<{ member: FinanceMember }>('/api/members', { method: 'POST', body: JSON.stringify(values) }, token),
+  setMemberActive: (token: string, memberId: string, active: boolean) => request<{ member: FinanceMember }>(`/api/members/${memberId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
   caseReport: async (token: string) => {
     const response = await fetch('/api/reports/cases.csv', { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error('The case report could not be exported.');

@@ -109,3 +109,12 @@ export interface AuditEvent {
   detail: string;
   createdAt: string;
 }
+
+export interface FinanceMember {
+  id: string;
+  name: string;
+  mobile: string;
+  city: string;
+  role: 'super_admin' | 'finance_manager' | 'finance_staff';
+  active: boolean;
+}

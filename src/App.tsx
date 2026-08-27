@@ -28,10 +28,10 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import type { AccountInput, Session } from './api';
-import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 
 type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
-type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
+type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -94,6 +94,8 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   const [printPass, setPrintPass] = useState<ReleasePass | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [financeMembers, setFinanceMembers] = useState<FinanceMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
 
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
   const unreadCount = appNotifications.filter((item) => !item.read).length;
@@ -136,6 +138,12 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     if (page !== 'reports' || !session.user.permissions.includes('audit.view')) return;
     setAuditLoading(true);
     api.auditEvents(session.token).then(({ events }) => setAuditEvents(events)).catch((error) => setActionError(error instanceof Error ? error.message : 'Unable to load the audit trail.')).finally(() => setAuditLoading(false));
+  }, [page, session.token]);
+
+  useEffect(() => {
+    if (page !== 'settings' || !session.user.permissions.includes('member.manage')) return;
+    setMembersLoading(true);
+    api.members(session.token).then(({ members }) => setFinanceMembers(members)).catch((error) => setActionError(error instanceof Error ? error.message : 'Unable to load finance users.')).finally(() => setMembersLoading(false));
   }, [page, session.token]);
 
   async function importMonthlyRegister(event: FormEvent<HTMLFormElement>) {
@@ -230,6 +238,31 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to export the report.'); }
   }
 
+  async function createMember(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      setActionError('');
+      setActionNotice('');
+      const { member } = await api.createMember(session.token, { name: String(formData.get('name') || ''), mobile: String(formData.get('mobile') || ''), city: String(formData.get('city') || ''), role: String(formData.get('role') || '') });
+      const response = await api.members(session.token);
+      setFinanceMembers(response.members);
+      setDialog(null);
+      setActionNotice(`${member.name} can now sign in with OTP.`);
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to add this finance user.'); }
+  }
+
+  async function changeMemberStatus(member: FinanceMember) {
+    try {
+      setActionError('');
+      setActionNotice('');
+      await api.setMemberActive(session.token, member.id, !member.active);
+      const response = await api.members(session.token);
+      setFinanceMembers(response.members);
+      setActionNotice(`${member.name} was ${member.active ? 'suspended' : 'reactivated'}.`);
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to change this finance user.'); }
+  }
+
   async function approveAuthority(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCase) return;
@@ -296,7 +329,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
-    settings: <SettingsPage />, 
+    settings: <SettingsPage members={financeMembers} loading={membersLoading} session={session} onAdd={() => setDialog('member')} onChangeStatus={changeMemberStatus} />,
   };
 
   return (
@@ -330,6 +363,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
       {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
+      {dialog === 'member' && <MemberDialog session={session} onClose={() => setDialog(null)} onSubmit={createMember} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
       {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} />}
@@ -408,8 +442,10 @@ function NotificationsPage({ items, onReadAll }: { items: AppNotification[]; onR
   return <><div className="page-heading"><div><p className="eyebrow">Finance and field updates</p><h2>Notifications</h2><p className="page-copy">Assignments, field updates, custody records, payment confirmation, and release events.</p></div><button className="secondary-button" onClick={onReadAll}><Check size={15} /> Mark all read</button></div><article className="card notification-list">{items.map((item) => <div className={`notification-row ${item.read ? '' : 'unread'}`} key={item.id}><span className={`notification-icon ${item.tone}`}><Bell size={16} /></span><div><h3>{item.title}</h3><p>{item.detail}</p><small>{item.createdAt}</small></div>{!item.read && <i />}</div>)}</article></>;
 }
 
-function SettingsPage() {
-  return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Tenant controls, notification preferences, agent access, and future integrations.</p></div></div><section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>Users and permissions</h3><p>Set finance-user and external-agent access within this financer workspace.</p><button className="text-button">Manage access <ChevronRight size={14} /></button></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Configure alerts for assignments, failed attempts, custody reports, and release events.</p><button className="text-button">Configure alerts <ChevronRight size={14} /></button></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>Excel imports are active. Loan-system API connection is the next integration slice.</p><button className="text-button">View import settings <ChevronRight size={14} /></button></article></section></>;
+function SettingsPage({ members, loading, session, onAdd, onChangeStatus }: { members: FinanceMember[]; loading: boolean; session: Session; onAdd: () => void; onChangeStatus: (member: FinanceMember) => void }) {
+  const canManage = session.user.permissions.includes('member.manage');
+  const canChange = (member: FinanceMember) => member.id !== session.user.id && member.role !== 'super_admin' && (session.user.role === 'super_admin' || member.role === 'finance_staff');
+  return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage finance-team access and review the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>{canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace('_', ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}<section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
 }
 
 function LegacyCaseDrawer({ caseItem, agentList, custody, onClose, onOpenDialog, onCloseCase }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onCloseCase: () => void }) {
@@ -487,6 +523,10 @@ function AccountDialog({ caseItem, onClose, onSubmit }: { caseItem?: RecoveryCas
 
 function AgentDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   return <Modal title="Add seizure agent" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Register an independent field agent. This mobile number becomes their OTP sign-in identity for assigned work.</p><label className="field-label">Full name<input name="name" required minLength={2} maxLength={100} autoComplete="name" /></label><label className="field-label">Indian mobile number<input name="mobile" required type="tel" inputMode="tel" autoComplete="tel" placeholder="98765 43210" /></label><label className="field-label">Primary city<input name="city" required minLength={2} maxLength={100} autoComplete="address-level2" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><UsersRound size={15} /> Add agent</button></div></form></Modal>;
+}
+
+function MemberDialog({ session, onClose, onSubmit }: { session: Session; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <Modal title="Add finance user" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Register a finance-team OTP identity. Managers handle operations; finance staff can maintain account intake only.</p><label className="field-label">Full name<input name="name" required minLength={2} maxLength={100} autoComplete="name" /></label><label className="field-label">Indian mobile number<input name="mobile" required type="tel" inputMode="tel" autoComplete="tel" placeholder="98765 43210" /></label><label className="field-label">Primary city<input name="city" required minLength={2} maxLength={100} autoComplete="address-level2" /></label><label className="field-label">Role<select name="role" required defaultValue="finance_staff"><option value="finance_staff">Finance staff — intake only</option>{session.user.role === 'super_admin' && <option value="finance_manager">Finance manager — operations and approvals</option>}</select></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><UsersRound size={15} /> Add finance user</button></div></form></Modal>;
 }
 
 function AssignDialog({ caseItem, agentList, onClose, onSubmit }: { caseItem: RecoveryCase; agentList: Agent[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
