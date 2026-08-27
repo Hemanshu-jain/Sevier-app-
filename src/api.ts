@@ -88,6 +88,8 @@ export const api = {
   logout: (token: string) => request<void>('/api/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<{ user: SessionUser }>('/api/me', {}, token),
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),
+  createAgent: (token: string, values: { name: string; mobile: string; city: string }) => request<{ agent: Agent }>('/api/agents', { method: 'POST', body: JSON.stringify(values) }, token),
+  setAgentActive: (token: string, agentId: string, active: boolean) => request<{ agent: Agent }>(`/api/agents/${agentId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
   importMonthly: (token: string, file: File, snapshotMonth: string) => {
     const body = new FormData();
     body.append('file', file);

@@ -31,7 +31,7 @@ import type { Session } from './api';
 import type { Agent, AppNotification, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
 
 type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'notifications' | 'settings';
-type DialogType = 'import' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
+type DialogType = 'import' | 'agent' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -157,6 +157,33 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to assign this case.'); }
   }
 
+  async function createAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      setActionError('');
+      setActionNotice('');
+      const { agent } = await api.createAgent(session.token, {
+        name: String(formData.get('name') || ''),
+        mobile: String(formData.get('mobile') || ''),
+        city: String(formData.get('city') || ''),
+      });
+      await loadWorkspace();
+      setDialog(null);
+      setActionNotice(`${agent.name} can now sign in with the registered mobile number.`);
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to add this agent.'); }
+  }
+
+  async function changeAgentStatus(agent: Agent) {
+    try {
+      setActionError('');
+      setActionNotice('');
+      await api.setAgentActive(session.token, agent.id, agent.status !== 'Active');
+      await loadWorkspace();
+      setActionNotice(`${agent.name} was ${agent.status === 'Active' ? 'suspended' : 'reactivated'}.`);
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to change this agent.'); }
+  }
+
   async function approveAuthority(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCase) return;
@@ -218,7 +245,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} onSelectCase={setSelectedCaseId} onPageChange={setPage} />, 
     register: <RegisterPage cases={visibleCases} onImport={() => setDialog('import')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
-    agents: <AgentsPage agents={agentList} cases={cases} onSelectCase={setSelectedCaseId} />, 
+    agents: <AgentsPage agents={agentList} cases={cases} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} />,
     custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
@@ -254,6 +281,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
 
       {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onCloseCase={closeCase} onPrint={printReleasePass} />}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
+      {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
       {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} />}
@@ -308,8 +336,8 @@ function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; o
   return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.map((item) => <tr key={item.id} className="row-action" onClick={() => onSelectCase(item.id)}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>)}</tbody></table></div></article>;
 }
 
-function AgentsPage({ agents, cases, onSelectCase }: { agents: Agent[]; cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div><button className="primary-button"><Plus size={16} /> Add agent</button></div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'Closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>completed this month</span></div>{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}</article>; })}</section></>;
+function AgentsPage({ agents, cases, canManage, onAdd, onChangeStatus, onSelectCase }: { agents: Agent[]; cases: RecoveryCase[]; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void }) {
+  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'Closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>completed this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section></>;
 }
 
 function CustodyPage({ custody, cases, onSelectCase }: { custody: CustodyRecord[]; cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
@@ -395,6 +423,10 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
 function ImportDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const currentMonth = new Date().toISOString().slice(0, 7);
   return <Modal title="Import monthly register" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Upload the financer’s reviewed CSV or XLSX file. Existing open accounts are updated while every monthly snapshot remains in the audit history.</p><label className="field-label">Loan cycle month<input name="snapshotMonth" type="month" required defaultValue={currentMonth} /></label><label className="field-label">Monthly delinquency file<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></label><p className="import-columns">Required columns: account number, borrower name, mobile, address, vehicle registration, make/model, vehicle type, pending amount, and overdue days.</p><label className="check-line"><input required type="checkbox" /> I confirm this file was reviewed by the finance company before import.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Plus size={15} /> Import accounts</button></div></form></Modal>;
+}
+
+function AgentDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <Modal title="Add seizure agent" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Register an independent field agent. This mobile number becomes their OTP sign-in identity for assigned work.</p><label className="field-label">Full name<input name="name" required minLength={2} maxLength={100} autoComplete="name" /></label><label className="field-label">Indian mobile number<input name="mobile" required type="tel" inputMode="tel" autoComplete="tel" placeholder="98765 43210" /></label><label className="field-label">Primary city<input name="city" required minLength={2} maxLength={100} autoComplete="address-level2" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><UsersRound size={15} /> Add agent</button></div></form></Modal>;
 }
 
 function AssignDialog({ caseItem, agentList, onClose, onSubmit }: { caseItem: RecoveryCase; agentList: Agent[]; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

@@ -16,6 +16,7 @@ import { hashSessionToken } from './session-token.mjs';
 import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
+import { createAgent, setAgentActive } from './agent-management.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -93,6 +94,10 @@ function mapNotification(row) {
 
 function mapEvidence(row) {
   return { id: row.id, caseId: row.case_id, originalName: row.original_name, mimeType: row.mime_type, byteSize: row.byte_size, latitude: row.latitude, longitude: row.longitude, capturedAt: row.captured_at, agentName: row.agent_name ?? undefined };
+}
+
+function mapAgent(row, activeCases = 0) {
+  return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth: 0, status: row.active ? 'Active' : 'Suspended' };
 }
 
 function mapReleasePass(row) {
@@ -185,10 +190,32 @@ app.get('/api/workspace', auth, (req, res) => {
     ? (visibleCaseIds.length ? db.prepare(`SELECT * FROM custody_records WHERE tenant_id = ? AND case_id IN (${visibleCaseIds.map(() => '?').join(',')}) ORDER BY created_at DESC`).all(req.user.tenantId, ...visibleCaseIds) : [])
     : db.prepare('SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC').all(req.user.tenantId);
   const agentRows = req.user.role === 'agent' ? [] : db.prepare(`SELECT id, name, mobile, city, active FROM users WHERE tenant_id = ? AND role = 'agent' ORDER BY name`).all(req.user.tenantId);
-  const agentData = agentRows.map((agent) => ({ id: agent.id, name: agent.name, mobile: agent.mobile, city: agent.city, activeCases: caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status !== 'Closed').length, completedThisMonth: 0, status: agent.active ? 'Active' : 'Suspended' }));
+  const agentData = agentRows.map((agent) => mapAgent(agent, caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status !== 'Closed').length));
   const notificationRows = db.prepare('SELECT * FROM notifications WHERE tenant_id = ? AND (recipient_user_id IS NULL OR recipient_user_id = ?) ORDER BY created_at DESC LIMIT 50').all(req.user.tenantId, req.user.id);
   const releasePassRows = req.user.role === 'agent' ? [] : db.prepare(`SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC`).all(req.user.tenantId);
   res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map(mapReleasePass) });
+});
+
+app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), (req, res) => {
+  try {
+    const agent = createAgent({ database: db, tenantId: req.user.tenantId, values: req.body ?? {} });
+    addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent.created', detail: `${agent.name} was added as an independent field agent.` });
+    return res.status(201).json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: 'Active' } });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The agent could not be added.' });
+  }
+});
+
+app.put('/api/agents/:id/status', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), (req, res) => {
+  if (typeof req.body?.active !== 'boolean') return res.status(422).json({ error: 'Choose an active or suspended status.' });
+  try {
+    const agent = setAgentActive({ database: db, tenantId: req.user.tenantId, agentId: req.params.id, active: req.body.active });
+    addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: agent.active ? 'agent.reactivated' : 'agent.suspended', detail: `${agent.name} was ${agent.active ? 'reactivated' : 'suspended'}.` });
+    return res.json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: agent.active ? 'Active' : 'Suspended' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The agent status could not be changed.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
 });
 
 app.post('/api/imports/monthly', auth, requirePermission(PERMISSIONS.IMPORT_MANAGE), monthlyImportUpload.single('file'), async (req, res, next) => {
