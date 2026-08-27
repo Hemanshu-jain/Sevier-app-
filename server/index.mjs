@@ -9,7 +9,7 @@ import { addAudit, addNotification, db, isoNow } from './db.mjs';
 import { loadConfig } from './config.mjs';
 import { validateCaseAction } from './case-actions.mjs';
 import { runTransaction } from './sqlite-transaction.mjs';
-import { isAllowedAuthorityDocument } from './file-validation.mjs';
+import { isAllowedAuthorityDocument, isAllowedEvidenceFile } from './file-validation.mjs';
 import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from './otp-service.mjs';
 import { requestSignInOtp, verifySignInOtp } from './otp-auth.mjs';
 import { hashSessionToken } from './session-token.mjs';
@@ -20,6 +20,7 @@ import { createAgent, setAgentActive } from './agent-management.mjs';
 import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
+import { validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -39,7 +40,7 @@ const uploadStorage = multer.diskStorage({
 const upload = multer({
   storage: uploadStorage,
   limits: { files: 5, fileSize: 15 * 1024 * 1024 },
-  fileFilter: (_req, file, callback) => callback(null, /^(image|video)\//.test(file.mimetype)),
+  fileFilter: (_req, file, callback) => callback(null, ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm'].includes(file.mimetype)),
 });
 
 const authorityUpload = multer({
@@ -140,6 +141,11 @@ function requireAssignedCase(req, res, next) {
   if (!recoveryCase) return res.status(404).json({ error: 'Assigned recovery case not found.' });
   req.recoveryCase = recoveryCase;
   return next();
+}
+
+function requireActiveFieldCase(req, res, next) {
+  const error = validateFieldCase(req.recoveryCase);
+  return error ? res.status(422).json({ error }) : next();
 }
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
@@ -358,7 +364,8 @@ app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_S
   const reason = String(req.body?.reason || 'Other');
   const note = String(req.body?.note || '').trim();
   if (!caseRow) return res.status(404).json({ error: 'Assigned recovery case not found.' });
-  if (!note) return res.status(422).json({ error: 'A factual field note is required.' });
+  const validationError = validateAttempt(caseRow, { reason, note });
+  if (validationError) return res.status(422).json({ error: validationError });
   const updatedAt = isoNow();
   db.prepare(`UPDATE recovery_cases SET status = 'Unable to recover', failure_reason = ?, failure_note = ?, failure_recorded_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(reason, note, updatedAt, updatedAt, caseRow.id, req.user.tenantId);
   addNotification({ tenantId: req.user.tenantId, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
@@ -369,9 +376,13 @@ app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_S
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 
-app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, upload.array('files', 5), (req, res) => {
+app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, requireActiveFieldCase, upload.array('files', 5), (req, res) => {
   const files = req.files ?? [];
   if (!files.length) return res.status(422).json({ error: 'Capture at least one photo or video before uploading.' });
+  if (files.some((file) => !isAllowedEvidenceFile(readFileSync(file.path), file.mimetype))) {
+    files.forEach((file) => unlinkSync(file.path));
+    return res.status(422).json({ error: 'Upload valid JPG, PNG, WebP, MP4, or WebM evidence files only.' });
+  }
   const latitude = Number(req.body?.latitude);
   const longitude = Number(req.body?.longitude);
   const capturedAt = String(req.body?.capturedAt || isoNow());
@@ -407,8 +418,8 @@ app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_S
   const inspection = req.body?.inspection && typeof req.body.inspection === 'object' ? req.body.inspection : null;
   if (!caseRow) return res.status(404).json({ error: 'Assigned recovery case not found.' });
   const evidenceCount = db.prepare('SELECT COUNT(*) AS count FROM evidence WHERE tenant_id = ? AND case_id = ?').get(req.user.tenantId, caseRow.id).count;
-  if (!yardName || !arrivalTime || !Number.isFinite(parkingRate) || checklist < 14 || !inspection || Object.keys(inspection).length < 14) return res.status(422).json({ error: 'Complete the parking handover and all condition checks first.' });
-  if (evidenceCount < 1) return res.status(422).json({ error: 'At least one photo or video evidence record is required before custody submission.' });
+  const validationError = validateCustody(caseRow, { yardName, arrivalTime, parkingRate, checklist, inspection, evidenceCount });
+  if (validationError) return res.status(422).json({ error: validationError });
   const id = `CT-${String(Date.now()).slice(-8)}`;
   const createdAt = isoNow();
   db.prepare('INSERT INTO custody_records (id, tenant_id, case_id, yard_name, arrival_time, parking_rate, created_at, agent_name, checklist_count, inspection_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.user.tenantId, caseRow.id, yardName, arrivalTime, parkingRate, createdAt, req.user.name, checklist, JSON.stringify(inspection));
