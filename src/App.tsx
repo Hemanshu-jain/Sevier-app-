@@ -28,9 +28,9 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import type { AccountInput, Session } from './api';
-import type { Agent, AppNotification, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
 
-type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'notifications' | 'settings';
+type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
 type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
@@ -40,6 +40,7 @@ const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard 
   { id: 'agents', label: 'Seizure agents', icon: UsersRound },
   { id: 'custody', label: 'Custody records', icon: PackageCheck },
   { id: 'releases', label: 'Release passes', icon: FileCheck2 },
+  { id: 'reports', label: 'Reports & audit', icon: Gauge },
 ];
 
 const statusStyles: Record<CaseStatus, string> = {
@@ -91,12 +92,20 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   const [caseEvidence, setCaseEvidence] = useState<EvidenceRecord[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [printPass, setPrintPass] = useState<ReleasePass | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
   const unreadCount = appNotifications.filter((item) => !item.read).length;
   const activeCases = cases.filter((item) => !['Imported', 'Closed'].includes(item.status));
   const pendingReview = cases.filter((item) => ['Imported', 'Unable to recover', 'Custody review'].includes(item.status));
   const releaseReady = cases.filter((item) => item.status === 'Payment confirmed').length;
+  const canViewReports = session.user.permissions.includes('report.export') || session.user.permissions.includes('audit.view');
+  const visibleNavigation = navigation.filter((item) => item.id !== 'reports' || canViewReports);
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+  const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
 
   const visibleCases = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -122,6 +131,12 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     setEvidenceLoading(true);
     api.evidence(session.token, selectedCaseId).then(({ evidence }) => setCaseEvidence(evidence)).catch(() => setCaseEvidence([])).finally(() => setEvidenceLoading(false));
   }, [selectedCaseId, session.token]);
+
+  useEffect(() => {
+    if (page !== 'reports' || !session.user.permissions.includes('audit.view')) return;
+    setAuditLoading(true);
+    api.auditEvents(session.token).then(({ events }) => setAuditEvents(events)).catch((error) => setActionError(error instanceof Error ? error.message : 'Unable to load the audit trail.')).finally(() => setAuditLoading(false));
+  }, [page, session.token]);
 
   async function importMonthlyRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -202,6 +217,19 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to change this agent.'); }
   }
 
+  async function exportCaseReport() {
+    try {
+      setActionError('');
+      const url = URL.createObjectURL(await api.caseReport(session.token));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `recovery-cases-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setActionNotice('The tenant case report was exported.');
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to export the report.'); }
+  }
+
   async function approveAuthority(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCase) return;
@@ -260,12 +288,13 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} onSelectCase={setSelectedCaseId} onPageChange={setPage} />, 
-    register: <RegisterPage cases={visibleCases} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
+    dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
+    register: <RegisterPage cases={visibleCases} monthLabel={monthLabel} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
     agents: <AgentsPage agents={agentList} cases={cases} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} />,
     custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
+    reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
     settings: <SettingsPage />, 
   };
@@ -276,7 +305,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
         <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>handoff</span></div>
         <div className="workspace-label">{session.user.tenantName}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {navigation.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
+          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
         </nav>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={16} /><div><strong>Tenant protected</strong><span>Audit trail is active</span></div></div>
@@ -287,7 +316,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       <main className="main-area">
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileNavOpen((value) => !value)} aria-label="Toggle navigation"><Menu size={21} /></button>
-          <div><p className="date-label">Thursday, August 6</p><h1>{page === 'dashboard' ? 'Good morning, Arun' : navigation.find((item) => item.id === page)?.label ?? page}</h1></div>
+          <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' ? `${greeting}, ${session.user.name.split(' ')[0]}` : visibleNavigation.find((item) => item.id === page)?.label ?? page}</h1></div>
           <div className="topbar-actions">
             <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search cases, people, vehicles..." /><kbd>⌘ K</kbd></label>
             <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount}</b>}</button>
@@ -311,13 +340,14 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   );
 }
 
-function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; activeCases: RecoveryCase[]; pendingReview: RecoveryCase[]; releaseReady: number; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
+function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady, monthLabel, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; activeCases: RecoveryCase[]; pendingReview: RecoveryCase[]; releaseReady: number; monthLabel: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
   const pendingAmount = activeCases.reduce((sum, item) => sum + item.pendingAmount, 0);
   const inField = cases.filter((item) => ['Assigned', 'Accepted', 'Attempt in progress'].includes(item.status));
+  const activeBranches = new Set(activeCases.map((item) => item.branch)).size;
   return <>
-    <div className="page-heading"><div><p className="eyebrow">Finance operations</p><h2>Recovery overview</h2></div><button className="date-control">August 2026 <ChevronDown size={14} /></button></div>
+    <div className="page-heading"><div><p className="eyebrow">Finance operations</p><h2>Recovery overview</h2></div><button className="date-control">{monthLabel} <ChevronDown size={14} /></button></div>
     <section className="metric-grid">
-      <MetricCard icon={<ClipboardCheck size={19} />} label="Open recovery cases" value={activeCases.length.toString()} foot="Across 4 active branches" tone="blue" />
+      <MetricCard icon={<ClipboardCheck size={19} />} label="Open recovery cases" value={activeCases.length.toString()} foot={`Across ${activeBranches} active branch${activeBranches === 1 ? '' : 'es'}`} tone="blue" />
       <MetricCard icon={<Clock3 size={19} />} label="Need finance review" value={pendingReview.length.toString()} foot="Imports and failed attempts" tone="amber" />
       <MetricCard icon={<Gauge size={19} />} label="Pending value" value={formatCurrency(pendingAmount)} foot="Across active recovery cases" tone="violet" />
       <MetricCard icon={<FileCheck2 size={19} />} label="Ready for release" value={releaseReady.toString()} foot="Payment confirmed by finance" tone="green" />
@@ -343,8 +373,8 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RegisterPage({ cases, onImport, onAdd, canManage, onSelectCase }: { cases: RecoveryCase[]; onImport: () => void; onAdd: () => void; canManage: boolean; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">August 2026 loan cycle</p><h2>Monthly delinquency register</h2><p className="page-copy">Imported borrower and vehicle accounts are reviewed before they become recovery cases.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}<button className="primary-button" onClick={onImport}><Plus size={16} /> Import monthly file</button></div></div><section className="register-band"><div><strong>{cases.length}</strong><span>imported accounts</span></div><div><strong>{formatCurrency(cases.reduce((sum, item) => sum + item.pendingAmount, 0))}</strong><span>visible pending amount</span></div><div><strong>{cases.filter((item) => item.status === 'Imported').length}</strong><span>awaiting first review</span></div><p>Only authorized finance users can view this borrower data.</p></section><CaseTable cases={cases} onSelectCase={onSelectCase} showLoan /> <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section></>;
+function RegisterPage({ cases, monthLabel, onImport, onAdd, canManage, onSelectCase }: { cases: RecoveryCase[]; monthLabel: string; onImport: () => void; onAdd: () => void; canManage: boolean; onSelectCase: (id: string) => void }) {
+  return <><div className="page-heading"><div><p className="eyebrow">{monthLabel} loan cycle</p><h2>Monthly delinquency register</h2><p className="page-copy">Imported borrower and vehicle accounts are reviewed before they become recovery cases.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}<button className="primary-button" onClick={onImport}><Plus size={16} /> Import monthly file</button></div></div><section className="register-band"><div><strong>{cases.length}</strong><span>imported accounts</span></div><div><strong>{formatCurrency(cases.reduce((sum, item) => sum + item.pendingAmount, 0))}</strong><span>visible pending amount</span></div><div><strong>{cases.filter((item) => item.status === 'Imported').length}</strong><span>awaiting first review</span></div><p>Only authorized finance users can view this borrower data.</p></section><CaseTable cases={cases} onSelectCase={onSelectCase} showLoan /> <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section></>;
 }
 
 function CasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
@@ -366,6 +396,12 @@ function CustodyPage({ custody, cases, onSelectCase }: { custody: CustodyRecord[
 function ReleasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
   const releaseCases = cases.filter((item) => ['Payment confirmed', 'Release pass printed', 'Closed'].includes(item.status));
   return <><div className="page-heading"><div><p className="eyebrow">Financer-controlled customer handover</p><h2>Release passes</h2><p className="page-copy">A printable pass is issued only after a finance employee manually confirms payment.</p></div><button className="secondary-button"><FileText size={15} /> Print history</button></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Customer</th><th>Vehicle</th><th>Payment status</th><th>Release pass</th><th>Current state</th><th /></tr></thead><tbody>{releaseCases.length ? releaseCases.map((item) => <tr className="row-action" onClick={() => onSelectCase(item.id)} key={item.id}><td><strong>{item.borrower.name}</strong><small>{item.borrower.mobile}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td><span className="checked-count"><Check size={12} /> Confirmed by finance</span></td><td className="token-id">{item.releasePassId ?? 'Not issued'}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={6}><div className="empty-table">No customer release passes are ready yet.</div></td></tr>}</tbody></table></div></article><section className="release-process"><span>1. Financer confirms dues</span><ChevronRight size={16} /><span>2. Print release pass</span><ChevronRight size={16} /><span>3. Customer presents pass at parking yard</span><ChevronRight size={16} /><span>4. Financer closes case</span></section></>;
+}
+
+function ReportsPage({ cases, events, loading, canExport, onExport }: { cases: RecoveryCase[]; events: AuditEvent[]; loading: boolean; canExport: boolean; onExport: () => void }) {
+  const pendingAmount = cases.filter((item) => !['Payment confirmed', 'Release pass printed', 'Closed'].includes(item.status)).reduce((sum, item) => sum + item.pendingAmount, 0);
+  const fieldOutcomes = cases.filter((item) => ['Unable to recover', 'Recovered', 'Custody certificate issued', 'Custody review', 'Payment pending', 'Payment confirmed', 'Release pass printed', 'Closed'].includes(item.status)).length;
+  return <><div className="page-heading"><div><p className="eyebrow">Tenant reporting</p><h2>Reports and audit trail</h2><p className="page-copy">Export the current recovery register and review recent finance and field actions.</p></div>{canExport && <button className="primary-button" onClick={onExport}><FileText size={15} /> Export case CSV</button>}</div><section className="metric-grid"><MetricCard icon={<ClipboardCheck size={19} />} label="Total cases" value={cases.length.toString()} foot="Current tenant workspace" tone="blue" /><MetricCard icon={<Gauge size={19} />} label="Pending value" value={formatCurrency(pendingAmount)} foot="Excludes cleared and closed cases" tone="violet" /><MetricCard icon={<Check size={19} />} label="Field outcomes" value={fieldOutcomes.toString()} foot="Attempt or custody outcome recorded" tone="green" /><MetricCard icon={<ShieldCheck size={19} />} label="Audit events" value={events.length.toString()} foot="Latest 100 recorded actions" tone="amber" /></section><article className="card data-card"><div className="card-heading"><div><h3>Recent audit trail</h3><p>Tenant-scoped security and workflow events</p></div></div><div className="table-scroll"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Case</th><th>Detail</th></tr></thead><tbody>{loading ? <tr><td colSpan={5}><div className="empty-table">Loading audit events…</div></td></tr> : events.length ? events.map((event) => <tr key={event.id}><td><strong>{new Date(event.createdAt).toLocaleDateString('en-IN')}</strong><small>{new Date(event.createdAt).toLocaleTimeString('en-IN')}</small></td><td>{event.actorName}</td><td><span className="token-id">{event.action}</span></td><td>{event.caseId ?? '—'}</td><td>{event.detail}</td></tr>) : <tr><td colSpan={5}><div className="empty-table">No audit events are available for this role.</div></td></tr>}</tbody></table></div></article></>;
 }
 
 function NotificationsPage({ items, onReadAll }: { items: AppNotification[]; onReadAll: () => void }) {

@@ -18,6 +18,7 @@ import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive } from './agent-management.mjs';
 import { createAccount, updateAccount } from './account-management.mjs';
+import { casesToCsv } from './report-export.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -238,6 +239,23 @@ app.put('/api/accounts/:id', auth, requirePermission(PERMISSIONS.ACCOUNT_MANAGE)
     const message = error instanceof Error ? error.message : 'The account could not be updated.';
     return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
   }
+});
+
+app.get('/api/reports/cases.csv', auth, requirePermission(PERMISSIONS.REPORT_EXPORT), (req, res) => {
+  const rows = db.prepare(`SELECT recovery_cases.*, users.name AS agent_name
+    FROM recovery_cases LEFT JOIN users ON users.id = recovery_cases.assigned_agent_user_id
+    WHERE recovery_cases.tenant_id = ? ORDER BY recovery_cases.updated_at DESC`).all(req.user.tenantId);
+  addAudit({ tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'report.exported', detail: `Exported ${rows.length} tenant recovery cases.` });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="recovery-cases-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(casesToCsv(rows));
+});
+
+app.get('/api/audit-events', auth, requirePermission(PERMISSIONS.AUDIT_VIEW), (req, res) => {
+  const events = db.prepare(`SELECT audit_events.*, users.name AS actor_name
+    FROM audit_events JOIN users ON users.id = audit_events.actor_user_id
+    WHERE audit_events.tenant_id = ? ORDER BY audit_events.created_at DESC LIMIT 100`).all(req.user.tenantId);
+  res.json({ events: events.map((event) => ({ id: event.id, caseId: event.case_id, actorName: event.actor_name, action: event.action, detail: event.detail, createdAt: event.created_at })) });
 });
 
 app.post('/api/imports/monthly', auth, requirePermission(PERMISSIONS.IMPORT_MANAGE), monthlyImportUpload.single('file'), async (req, res, next) => {

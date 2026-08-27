@@ -1,4 +1,4 @@
-import type { Agent, AppNotification, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent';
 
@@ -106,6 +106,12 @@ export const api = {
   setAgentActive: (token: string, agentId: string, active: boolean) => request<{ agent: Agent }>(`/api/agents/${agentId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
   createAccount: (token: string, values: AccountInput) => request<{ case: RecoveryCase }>('/api/accounts', { method: 'POST', body: JSON.stringify(values) }, token),
   updateAccount: (token: string, caseId: string, values: AccountInput) => request<{ case: RecoveryCase }>(`/api/accounts/${caseId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
+  auditEvents: (token: string) => request<{ events: AuditEvent[] }>('/api/audit-events', {}, token),
+  caseReport: async (token: string) => {
+    const response = await fetch('/api/reports/cases.csv', { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('The case report could not be exported.');
+    return response.blob();
+  },
   importMonthly: (token: string, file: File, snapshotMonth: string) => {
     const body = new FormData();
     body.append('file', file);

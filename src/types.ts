@@ -100,3 +100,12 @@ export interface ReleasePass {
   paymentReference?: string;
   issuedByName?: string;
 }
+
+export interface AuditEvent {
+  id: number;
+  caseId: string | null;
+  actorName: string;
+  action: string;
+  detail: string;
+  createdAt: string;
+}
