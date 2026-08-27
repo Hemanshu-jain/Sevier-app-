@@ -27,11 +27,11 @@ import {
   X,
 } from 'lucide-react';
 import { api } from './api';
-import type { Session } from './api';
+import type { AccountInput, Session } from './api';
 import type { Agent, AppNotification, CaseStatus, CustodyRecord, EvidenceRecord, RecoveryCase, ReleasePass } from './types';
 
 type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'notifications' | 'settings';
-type DialogType = 'import' | 'agent' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
+type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -142,6 +142,24 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to import the register.'); }
   }
 
+  async function saveAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const values = Object.fromEntries(['accountNumber', 'borrowerName', 'borrowerMobile', 'borrowerAddress', 'registration', 'makeModel', 'vehicleType', 'chassis', 'branch', 'pendingAmount', 'overdueDays'].map((field) => [field, String(formData.get(field) || '')])) as unknown as AccountInput;
+    try {
+      setActionError('');
+      setActionNotice('');
+      const response = dialog === 'edit-account' && selectedCase
+        ? await api.updateAccount(session.token, selectedCase.id, values)
+        : await api.createAccount(session.token, values);
+      await loadWorkspace();
+      setSelectedCaseId(response.case.id);
+      setPage('register');
+      setDialog(null);
+      setActionNotice(dialog === 'edit-account' ? 'Account details were updated.' : 'The account was added for finance review.');
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to save this account.'); }
+  }
+
   async function assignCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCase) return;
@@ -243,7 +261,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
 
   const pageContent: Record<Page, ReactNode> = {
     dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} onSelectCase={setSelectedCaseId} onPageChange={setPage} />, 
-    register: <RegisterPage cases={visibleCases} onImport={() => setDialog('import')} onSelectCase={setSelectedCaseId} />,
+    register: <RegisterPage cases={visibleCases} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
     agents: <AgentsPage agents={agentList} cases={cases} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} />,
     custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
@@ -281,6 +299,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
 
       {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onCloseCase={closeCase} onPrint={printReleasePass} />}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
+      {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
       {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
@@ -324,8 +343,8 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RegisterPage({ cases, onImport, onSelectCase }: { cases: RecoveryCase[]; onImport: () => void; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">August 2026 loan cycle</p><h2>Monthly delinquency register</h2><p className="page-copy">Imported borrower and vehicle accounts are reviewed before they become recovery cases.</p></div><div className="heading-actions"><button className="secondary-button"><SlidersHorizontal size={15} /> Filter</button><button className="primary-button" onClick={onImport}><Plus size={16} /> Import monthly file</button></div></div><section className="register-band"><div><strong>{cases.length}</strong><span>imported accounts</span></div><div><strong>{formatCurrency(cases.reduce((sum, item) => sum + item.pendingAmount, 0))}</strong><span>visible pending amount</span></div><div><strong>{cases.filter((item) => item.status === 'Imported').length}</strong><span>awaiting first review</span></div><p>Only authorized finance users can view this borrower data.</p></section><CaseTable cases={cases} onSelectCase={onSelectCase} showLoan /> <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section></>;
+function RegisterPage({ cases, onImport, onAdd, canManage, onSelectCase }: { cases: RecoveryCase[]; onImport: () => void; onAdd: () => void; canManage: boolean; onSelectCase: (id: string) => void }) {
+  return <><div className="page-heading"><div><p className="eyebrow">August 2026 loan cycle</p><h2>Monthly delinquency register</h2><p className="page-copy">Imported borrower and vehicle accounts are reviewed before they become recovery cases.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}<button className="primary-button" onClick={onImport}><Plus size={16} /> Import monthly file</button></div></div><section className="register-band"><div><strong>{cases.length}</strong><span>imported accounts</span></div><div><strong>{formatCurrency(cases.reduce((sum, item) => sum + item.pendingAmount, 0))}</strong><span>visible pending amount</span></div><div><strong>{cases.filter((item) => item.status === 'Imported').length}</strong><span>awaiting first review</span></div><p>Only authorized finance users can view this borrower data.</p></section><CaseTable cases={cases} onSelectCase={onSelectCase} showLoan /> <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section></>;
 }
 
 function CasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
@@ -375,6 +394,7 @@ function LegacyCaseDrawer({ caseItem, agentList, custody, onClose, onOpenDialog,
 function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onCloseCase, onPrint }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onCloseCase: () => void; onPrint: (pass: ReleasePass) => void }) {
   const assignedName = agentName(agentList, caseItem.assignedAgentId);
   const actionButton = () => {
+    if (caseItem.status === 'Imported' && !caseItem.authority) return <button className="primary-button full" onClick={() => onOpenDialog('authority')}><ShieldCheck size={16} /> Review recovery authority</button>;
     if (caseItem.status === 'Imported' || caseItem.status === 'Unable to recover') return <button className="primary-button full" onClick={() => onOpenDialog('assign')}><UsersRound size={16} /> {caseItem.status === 'Imported' ? 'Assign seizure agent' : 'Reassign case'}</button>;
     if (['Assigned', 'Accepted', 'Attempt in progress'].includes(caseItem.status)) return <div className="field-waiting"><Clock3 size={16} /> Awaiting the assigned agent’s field update.</div>;
     if (['Recovered', 'Custody certificate issued', 'Payment pending'].includes(caseItem.status)) return <button className="primary-button full" onClick={() => onOpenDialog('payment')}><Check size={16} /> Confirm payment</button>;
@@ -384,7 +404,7 @@ function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, r
   };
   return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer"><div className="drawer-top"><div><p className="eyebrow">{caseItem.id}</p><h2>{caseItem.borrower.name}</h2></div><button className="close-button" onClick={onClose}><X size={18} /></button></div><StatusPill status={caseItem.status} />
     <div className="drawer-section"><p className="section-label">Borrower</p><div className="detail-list"><span><UsersRound size={14} /> {caseItem.borrower.mobile}</span><span><MapPin size={14} /> {caseItem.borrower.address}</span></div></div>
-    <div className="drawer-section"><p className="section-label">Vehicle and loan</p><div className="vehicle-card"><span>{caseItem.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><strong>{caseItem.vehicle.registration}</strong><p>{caseItem.vehicle.makeModel}</p></div></div><dl className="detail-grid"><div><dt>Pending amount</dt><dd>{formatCurrency(caseItem.pendingAmount)}</dd></div><div><dt>Overdue</dt><dd>{caseItem.overdueDays} days</dd></div><div><dt>Loan account</dt><dd>{caseItem.accountNumber}</dd></div><div><dt>Chassis</dt><dd>{caseItem.vehicle.chassis}</dd></div></dl></div>
+    <div className="drawer-section"><p className="section-label">Vehicle and loan</p><div className="vehicle-card"><span>{caseItem.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><strong>{caseItem.vehicle.registration}</strong><p>{caseItem.vehicle.makeModel}</p></div></div><dl className="detail-grid"><div><dt>Pending amount</dt><dd>{formatCurrency(caseItem.pendingAmount)}</dd></div><div><dt>Overdue</dt><dd>{caseItem.overdueDays} days</dd></div><div><dt>Loan account</dt><dd>{caseItem.accountNumber}</dd></div><div><dt>Chassis</dt><dd>{caseItem.vehicle.chassis}</dd></div></dl>{session.user.permissions.includes('account.manage') && caseItem.status === 'Imported' && !caseItem.authority && <button className="text-button edit-account" onClick={() => onOpenDialog('edit-account')}>Edit account before approval <ChevronRight size={14} /></button>}</div>
     <div className="drawer-section"><p className="section-label">Recovery authority</p>{caseItem.authority ? <div className="payment-detail"><ShieldCheck size={16} /><div><strong>Approved by finance</strong><span>{caseItem.authority.documentName}</span><small>{new Date(caseItem.authority.approvedAt).toLocaleString()}</small></div></div> : <div className="evidence-empty">No authority document approved yet.</div>}</div>
     <div className="drawer-section"><p className="section-label">Assignment</p><div className="assignment-detail"><span className="agent-avatar small">{assignedName.split(' ').map((word) => word[0]).join('')}</span><div><strong>{assignedName}</strong><small>{caseItem.assignedAt ? new Date(caseItem.assignedAt).toLocaleString() : 'Waiting for finance assignment'}</small></div></div></div>
     {caseItem.failure && <div className="failure-note"><span>!</span><div><strong>{caseItem.failure.reason}</strong><p>{caseItem.failure.note}</p><small>{caseItem.failure.recordedAt}</small></div></div>}
@@ -423,6 +443,10 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
 function ImportDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const currentMonth = new Date().toISOString().slice(0, 7);
   return <Modal title="Import monthly register" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Upload the financer’s reviewed CSV or XLSX file. Existing open accounts are updated while every monthly snapshot remains in the audit history.</p><label className="field-label">Loan cycle month<input name="snapshotMonth" type="month" required defaultValue={currentMonth} /></label><label className="field-label">Monthly delinquency file<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></label><p className="import-columns">Required columns: account number, borrower name, mobile, address, vehicle registration, make/model, vehicle type, pending amount, and overdue days.</p><label className="check-line"><input required type="checkbox" /> I confirm this file was reviewed by the finance company before import.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Plus size={15} /> Import accounts</button></div></form></Modal>;
+}
+
+function AccountDialog({ caseItem, onClose, onSubmit }: { caseItem?: RecoveryCase; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <Modal title={caseItem ? 'Edit imported account' : 'Add account manually'} onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">{caseItem ? 'Correct the borrower, vehicle, or loan details before approving recovery authority.' : 'Use this for a single reviewed exception instead of uploading a monthly file.'}</p><div className="form-two-col"><label className="field-label">Loan account<input name="accountNumber" required defaultValue={caseItem?.accountNumber} /></label><label className="field-label">Customer name<input name="borrowerName" required defaultValue={caseItem?.borrower.name} /></label><label className="field-label">Mobile number<input name="borrowerMobile" type="tel" required defaultValue={caseItem?.borrower.mobile} /></label><label className="field-label">Branch<input name="branch" required defaultValue={caseItem?.branch} /></label></div><label className="field-label">Customer address<textarea name="borrowerAddress" required defaultValue={caseItem?.borrower.address} /></label><div className="form-two-col"><label className="field-label">Registration number<input name="registration" required defaultValue={caseItem?.vehicle.registration} /></label><label className="field-label">Make / model<input name="makeModel" required defaultValue={caseItem?.vehicle.makeModel} /></label><label className="field-label">Vehicle type<select name="vehicleType" required defaultValue={caseItem?.vehicle.type ?? ''}><option value="" disabled>Select type</option><option value="2-wheeler">2-wheeler</option><option value="4-wheeler">4-wheeler</option></select></label><label className="field-label">Chassis number<input name="chassis" defaultValue={caseItem?.vehicle.chassis} /></label><label className="field-label">Pending amount (₹)<input name="pendingAmount" type="number" min="0" step="0.01" required defaultValue={caseItem?.pendingAmount} /></label><label className="field-label">Overdue days<input name="overdueDays" type="number" min="0" step="1" required defaultValue={caseItem?.overdueDays} /></label></div><label className="check-line"><input required type="checkbox" /> I verified these details against the finance company’s current account record.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Check size={15} /> Save account</button></div></form></Modal>;
 }
 
 function AgentDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

@@ -2,6 +2,7 @@
 
 .app-notice{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#effaf4;border:1px solid #cce9d9;color:#247156;border-radius:7px;padding:9px 11px;margin-bottom:12px;font-size:10px;font-weight:700}.app-notice button{display:grid;place-items:center;border:0;background:transparent;color:inherit}.import-columns{border:1px solid #dce8f8;background:#f5f8fd;color:#60758e;border-radius:6px;padding:9px;font-size:9px;line-height:1.55}
 .agent-card-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}.agent-card-actions .agent-case-link,.agent-card-actions .text-button{margin-top:0}.agent-card-actions .text-button:disabled{color:#a7b0bc;cursor:not-allowed}
+.edit-account{margin-top:10px}
 
 :root { --navy:#102c51; --navy-2:#193b68; --ink:#17283d; --muted:#718197; --line:#e6ebf1; --page:#f6f8fb; --blue:#276be7; --blue-soft:#eaf1ff; --green:#168260; --green-soft:#e5f6ef; --amber:#a35f0c; --amber-soft:#fff3df; --red:#be4e4b; --red-soft:#fff0ee; --violet:#7656c9; --violet-soft:#f0ecff; --shadow:0 12px 30px rgba(22,45,76,.055); }
 * { box-sizing:border-box; }

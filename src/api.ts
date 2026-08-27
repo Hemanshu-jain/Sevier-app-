@@ -47,6 +47,20 @@ export interface ImportError {
   message: string;
 }
 
+export interface AccountInput {
+  accountNumber: string;
+  borrowerName: string;
+  borrowerMobile: string;
+  borrowerAddress: string;
+  registration: string;
+  makeModel: string;
+  vehicleType: string;
+  chassis: string;
+  branch: string;
+  pendingAmount: string;
+  overdueDays: string;
+}
+
 const sessionKey = 'handoff-session';
 
 export function storedSession(): Session | null {
@@ -90,6 +104,8 @@ export const api = {
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),
   createAgent: (token: string, values: { name: string; mobile: string; city: string }) => request<{ agent: Agent }>('/api/agents', { method: 'POST', body: JSON.stringify(values) }, token),
   setAgentActive: (token: string, agentId: string, active: boolean) => request<{ agent: Agent }>(`/api/agents/${agentId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
+  createAccount: (token: string, values: AccountInput) => request<{ case: RecoveryCase }>('/api/accounts', { method: 'POST', body: JSON.stringify(values) }, token),
+  updateAccount: (token: string, caseId: string, values: AccountInput) => request<{ case: RecoveryCase }>(`/api/accounts/${caseId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
   importMonthly: (token: string, file: File, snapshotMonth: string) => {
     const body = new FormData();
     body.append('file', file);

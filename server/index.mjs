@@ -17,6 +17,7 @@ import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contra
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive } from './agent-management.mjs';
+import { createAccount, updateAccount } from './account-management.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -214,6 +215,27 @@ app.put('/api/agents/:id/status', auth, requirePermission(PERMISSIONS.AGENT_MANA
     return res.json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: agent.active ? 'Active' : 'Suspended' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The agent status could not be changed.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.post('/api/accounts', auth, requirePermission(PERMISSIONS.ACCOUNT_MANAGE), (req, res) => {
+  try {
+    const account = createAccount({ database: db, tenantId: req.user.tenantId, values: req.body ?? {} });
+    addAudit({ tenantId: req.user.tenantId, caseId: account.id, actorUserId: req.user.id, action: 'account.created', detail: `Manual account ${account.accountNumber} was added for finance review.` });
+    return res.status(201).json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(account.id, req.user.tenantId)) });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The account could not be added.' });
+  }
+});
+
+app.put('/api/accounts/:id', auth, requirePermission(PERMISSIONS.ACCOUNT_MANAGE), (req, res) => {
+  try {
+    const account = updateAccount({ database: db, tenantId: req.user.tenantId, caseId: req.params.id, values: req.body ?? {} });
+    addAudit({ tenantId: req.user.tenantId, caseId: account.id, actorUserId: req.user.id, action: 'account.updated', detail: `Account ${account.accountNumber} details were corrected before authority approval.` });
+    return res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(account.id, req.user.tenantId)) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The account could not be updated.';
     return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
   }
 });
