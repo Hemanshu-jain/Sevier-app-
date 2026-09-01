@@ -15,7 +15,7 @@ export function validateAttempt(recoveryCase, { reason, note }) {
   return null;
 }
 
-export function validateCustody(recoveryCase, { yardName, arrivalTime, parkingRate, checklist: completed, inspection, evidenceCount }) {
+export function validateCustody(recoveryCase, { yardName, arrivalTime, parkingRate, checklist: completed, inspection, evidenceCount, customNote }) {
   const statusError = validateFieldCase(recoveryCase);
   if (statusError) return statusError;
   if (!String(yardName || '').trim() || String(yardName).length > 200) return 'Enter a valid parking location.';
@@ -23,5 +23,6 @@ export function validateCustody(recoveryCase, { yardName, arrivalTime, parkingRa
   if (!Number.isFinite(parkingRate) || parkingRate < 0 || parkingRate > 1_000_000) return 'Enter a valid daily parking rate.';
   if (completed !== checklist.length || !inspection || checklist.some((item) => !conditions.has(inspection[item]))) return 'Complete every known vehicle condition check.';
   if (evidenceCount < 1) return 'At least one photo or video evidence record is required before custody submission.';
+  if (String(customNote || '').length > 2000) return 'Keep the custom note within 2,000 characters.';
   return null;
 }

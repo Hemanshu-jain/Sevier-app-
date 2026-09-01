@@ -8,7 +8,7 @@ export function validateCaseAction(action, recoveryCase, context = {}) {
       if (String(context.assignmentNote || '').length > 2000) return 'The assignment note must be 2,000 characters or fewer.';
       return ['Imported', 'Unable to recover'].includes(recoveryCase.status) ? null : 'This case is not ready for assignment.';
     case 'approve_custody':
-      return recoveryCase.status === 'Custody review' ? null : 'A submitted custody report is required.';
+      return ['Custody review', 'Custody certificate issued'].includes(recoveryCase.status) ? null : 'A submitted custody report is required.';
     case 'confirm_payment':
       return recoveryCase.status === 'Payment pending' ? null : 'Finance must approve custody before confirming payment.';
     case 'issue_release':

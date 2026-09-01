@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   Bell,
   Camera,
@@ -27,9 +27,12 @@ import {
 import { api } from './api';
 import type { AccountInput, Session } from './api';
 import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import { financeCaseAction } from './finance-case-action';
+import { isActivationKey, isSearchShortcut } from './interaction';
+import { financeReviewCases, recoveryPipeline } from './desktop-metrics';
 
 type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
-type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | null;
+type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | 'close' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -73,6 +76,12 @@ function StatusPill({ status }: { status: CaseStatus }) {
   return <span className={`status-pill ${statusStyles[status]}`}><i />{status}</span>;
 }
 
+function openRowFromKeyboard(event: ReactKeyboardEvent<HTMLTableRowElement>, onOpen: () => void) {
+  if (!isActivationKey(event.key)) return;
+  event.preventDefault();
+  onOpen();
+}
+
 function App({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [page, setPage] = useState<Page>('dashboard');
   const [cases, setCases] = useState<RecoveryCase[]>([]);
@@ -94,11 +103,12 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   const [auditLoading, setAuditLoading] = useState(false);
   const [financeMembers, setFinanceMembers] = useState<FinanceMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
   const unreadCount = appNotifications.filter((item) => !item.read).length;
   const activeCases = cases.filter((item) => !['Imported', 'Closed'].includes(item.status));
-  const pendingReview = cases.filter((item) => ['Imported', 'Unable to recover', 'Custody review'].includes(item.status));
+  const pendingReview = financeReviewCases(cases);
   const releaseReady = cases.filter((item) => item.status === 'Payment confirmed').length;
   const canViewReports = session.user.permissions.includes('report.export') || session.user.permissions.includes('audit.view');
   const visibleNavigation = navigation.filter((item) => item.id !== 'reports' || canViewReports);
@@ -143,6 +153,16 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     setMembersLoading(true);
     api.members(session.token).then(({ members }) => setFinanceMembers(members)).catch((error) => setActionError(error instanceof Error ? error.message : 'Unable to load finance users.')).finally(() => setMembersLoading(false));
   }, [page, session.token]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (!isSearchShortcut(event)) return;
+      event.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
 
   async function importMonthlyRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -311,6 +331,8 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       setActionError('');
       await api.closeCase(session.token, selectedCase.id);
       await loadWorkspace();
+      setDialog(null);
+      setActionNotice(`${selectedCase.id} was closed after the vehicle release was confirmed.`);
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to close the case.'); }
   }
 
@@ -337,7 +359,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
         <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>handoff</span></div>
         <div className="workspace-label">{session.user.tenantName}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
+          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
         </nav>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={16} /><div><strong>Tenant protected</strong><span>Audit trail is active</span></div></div>
@@ -350,15 +372,15 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
           <button className="mobile-menu" onClick={() => setMobileNavOpen((value) => !value)} aria-label="Toggle navigation"><Menu size={21} /></button>
           <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' ? `${greeting}, ${session.user.name.split(' ')[0]}` : visibleNavigation.find((item) => item.id === page)?.label ?? page}</h1></div>
           <div className="topbar-actions">
-            <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search cases, people, vehicles..." /><kbd>⌘ K</kbd></label>
+            <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && !['register', 'cases'].includes(page)) setPage('cases'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
             <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount}</b>}</button>
-            <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>
+            {session.user.permissions.includes('import.manage') && <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>}
           </div>
         </header>
-        <section className="content-area">{actionError && <div className="app-error">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading">Loading your tenant workspace…</div> : pageContent[page]}</section>
+        <section className="content-area">{actionError && <div className="app-error" role="alert">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice" role="status">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading" role="status">Loading your tenant workspace…</div> : pageContent[page]}</section>
       </main>
 
-      {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onCloseCase={closeCase} onPrint={printReleasePass} />}
+      {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} />}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
       {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
@@ -368,6 +390,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} />}
       {dialog === 'payment' && selectedCase && <PaymentDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={clearPayment} />}
       {dialog === 'release' && selectedCase && <ReleaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={issueReleasePass} />}
+      {dialog === 'close' && selectedCase && <CloseCaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={closeCase} />}
       {printPass && <PrintableReleasePass pass={printPass} caseItem={cases.find((item) => item.id === printPass.caseId)} custody={custody.find((item) => item.id === printPass.custodyId)} tenantName={session.user.tenantName} />}
     </div>
   );
@@ -377,6 +400,7 @@ function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady,
   const pendingAmount = activeCases.reduce((sum, item) => sum + item.pendingAmount, 0);
   const inField = cases.filter((item) => ['Assigned', 'Accepted', 'Attempt in progress'].includes(item.status));
   const activeBranches = new Set(activeCases.map((item) => item.branch)).size;
+  const pipeline = recoveryPipeline(cases);
   return <>
     <div className="page-heading"><div><p className="eyebrow">Finance operations</p><h2>Recovery overview</h2></div><span className="date-control">{monthLabel}</span></div>
     <section className="metric-grid">
@@ -385,10 +409,10 @@ function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady,
       <MetricCard icon={<Gauge size={19} />} label="Pending value" value={formatCurrency(pendingAmount)} foot="Across active recovery cases" tone="violet" />
       <MetricCard icon={<FileCheck2 size={19} />} label="Ready for release" value={releaseReady.toString()} foot="Payment confirmed by finance" tone="green" />
     </section>
-    <section className="workflow-strip"><div><p className="eyebrow">Controlled operating flow</p><h3>Every action moves through a recorded case lifecycle.</h3></div><ol><li className="done"><span>1</span>Import</li><li className="done"><span>2</span>Assign</li><li className="current"><span>3</span>Field report</li><li><span>4</span>Custody</li><li><span>5</span>Release</li></ol></section>
+    <section className="workflow-strip"><div><p className="eyebrow">Controlled operating flow</p><h3>Live cases at each recorded lifecycle stage.</h3></div><ol>{pipeline.map((stage) => <li className={stage.count ? 'current' : ''} key={stage.label}><span>{stage.count}</span>{stage.label}</li>)}</ol></section>
     <section className="dashboard-columns">
       <article className="card case-card"><CardHeading title="Active field work" description="Cases assigned to independent agents" action="View cases" onAction={() => onPageChange('cases')} />
-        <div className="table-scroll"><table><thead><tr><th>Case</th><th>Vehicle</th><th>Assigned agent</th><th>Status</th><th /></tr></thead><tbody>{inField.map((item) => <tr key={item.id} className="row-action" onClick={() => onSelectCase(item.id)}><td><strong>{item.borrower.name}</strong><small>{item.id}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td>{agentName(agentList, item.assignedAgentId)}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>)}</tbody></table></div>
+        <div className="table-scroll"><table><thead><tr><th>Case</th><th>Vehicle</th><th>Assigned agent</th><th>Status</th><th /></tr></thead><tbody>{inField.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td>{agentName(agentList, item.assignedAgentId)}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>)}</tbody></table></div>
       </article>
       <aside className="dashboard-side">
         <article className="card attention-card"><div className="attention-icon"><Bell size={18} /></div><p className="eyebrow">Action needed</p><h3>Review {pendingReview.length} case{pendingReview.length === 1 ? '' : 's'} before the next assignment.</h3><button onClick={() => onPageChange('register')}>Open monthly register <ChevronRight size={15} /></button></article>
@@ -417,7 +441,7 @@ function CasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCas
 }
 
 function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void; showLoan: boolean }) {
-  return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.length ? cases.map((item) => <tr key={item.id} className="row-action" onClick={() => onSelectCase(item.id)}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={showLoan ? 7 : 6}><div className="empty-table">No cases match this view.</div></td></tr>}</tbody></table></div></article>;
+  return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.length ? cases.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={showLoan ? 7 : 6}><div className="empty-table">No cases match this view.</div></td></tr>}</tbody></table></div></article>;
 }
 
 function AgentsPage({ agents, cases, canManage, onAdd, onChangeStatus, onSelectCase }: { agents: Agent[]; cases: RecoveryCase[]; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void }) {
@@ -425,12 +449,12 @@ function AgentsPage({ agents, cases, canManage, onAdd, onChangeStatus, onSelectC
 }
 
 function CustodyPage({ custody, cases, onSelectCase }: { custody: CustodyRecord[]; cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">Digital parking check slips</p><h2>Custody records</h2><p className="page-copy">A condition and handover record is created when an agent reports custody.</p></div></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Certificate</th><th>Vehicle / case</th><th>Parking location</th><th>Agent</th><th>Checklist</th><th /></tr></thead><tbody>{custody.map((item) => { const caseItem = cases.find((current) => current.id === item.caseId); return <tr className="row-action" key={item.id} onClick={() => onSelectCase(item.caseId)}><td><strong className="token-id">{item.id}</strong><small>{item.createdAt}</small></td><td>{caseItem?.vehicle.registration}<small>{item.caseId} · {caseItem?.vehicle.makeModel}</small></td><td>{item.yardName}<small>{item.arrivalTime}</small></td><td>{item.agentName}</td><td><span className="checked-count"><Check size={12} /> {item.checklist}/{checklist.length}</span></td><td><ChevronRight size={17} /></td></tr>; })}</tbody></table></div></article><section className="receipt-grid">{checklist.map((item) => <span key={item}><Check size={14} /> {item}</span>)}</section></>;
+  return <><div className="page-heading"><div><p className="eyebrow">Digital parking check slips</p><h2>Custody records</h2><p className="page-copy">A condition and handover record is created when an agent reports custody.</p></div></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Certificate</th><th>Vehicle / case</th><th>Parking location</th><th>Agent</th><th>Checklist</th><th /></tr></thead><tbody>{custody.length ? custody.map((item) => { const caseItem = cases.find((current) => current.id === item.caseId); return <tr className="row-action" role="button" tabIndex={0} aria-label={`Open custody certificate ${item.id}`} key={item.id} onClick={() => onSelectCase(item.caseId)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.caseId))}><td><strong className="token-id">{item.id}</strong><small>{item.createdAt}</small></td><td>{caseItem?.vehicle.registration}<small>{item.caseId} · {caseItem?.vehicle.makeModel}</small></td><td>{item.yardName}<small>{item.arrivalTime}</small></td><td>{item.agentName}</td><td><span className="checked-count"><Check size={12} /> {item.checklist}/{checklist.length}</span></td><td><ChevronRight size={17} /></td></tr>; }) : <tr><td colSpan={6}><div className="empty-table">No custody certificates have been submitted yet.</div></td></tr>}</tbody></table></div></article><section className="receipt-grid">{checklist.map((item) => <span key={item}><Check size={14} /> {item}</span>)}</section></>;
 }
 
 function ReleasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
   const releaseCases = cases.filter((item) => ['Payment confirmed', 'Release pass printed', 'Closed'].includes(item.status));
-  return <><div className="page-heading"><div><p className="eyebrow">Financer-controlled customer handover</p><h2>Release passes</h2><p className="page-copy">A printable pass is issued only after a finance employee manually confirms payment.</p></div></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Customer</th><th>Vehicle</th><th>Payment status</th><th>Release pass</th><th>Current state</th><th /></tr></thead><tbody>{releaseCases.length ? releaseCases.map((item) => <tr className="row-action" onClick={() => onSelectCase(item.id)} key={item.id}><td><strong>{item.borrower.name}</strong><small>{item.borrower.mobile}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td><span className="checked-count"><Check size={12} /> Confirmed by finance</span></td><td className="token-id">{item.releasePassId ?? 'Not issued'}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={6}><div className="empty-table">No customer release passes are ready yet.</div></td></tr>}</tbody></table></div></article><section className="release-process"><span>1. Financer confirms dues</span><ChevronRight size={16} /><span>2. Print release pass</span><ChevronRight size={16} /><span>3. Customer presents pass at parking yard</span><ChevronRight size={16} /><span>4. Financer closes case</span></section></>;
+  return <><div className="page-heading"><div><p className="eyebrow">Financer-controlled customer handover</p><h2>Release passes</h2><p className="page-copy">A printable pass is issued only after a finance employee manually confirms payment.</p></div></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Customer</th><th>Vehicle</th><th>Payment status</th><th>Release pass</th><th>Current state</th><th /></tr></thead><tbody>{releaseCases.length ? releaseCases.map((item) => <tr className="row-action" role="button" tabIndex={0} aria-label={`Open release case ${item.id}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))} key={item.id}><td><strong>{item.borrower.name}</strong><small>{item.borrower.mobile}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td><span className="checked-count"><Check size={12} /> Confirmed by finance</span></td><td className="token-id">{item.releasePassId ?? 'Not issued'}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={6}><div className="empty-table">No customer release passes are ready yet.</div></td></tr>}</tbody></table></div></article><section className="release-process"><span>1. Financer confirms dues</span><ChevronRight size={16} /><span>2. Print release pass</span><ChevronRight size={16} /><span>3. Customer presents pass at parking yard</span><ChevronRight size={16} /><span>4. Financer closes case</span></section></>;
 }
 
 function ReportsPage({ cases, events, loading, canExport, onExport }: { cases: RecoveryCase[]; events: AuditEvent[]; loading: boolean; canExport: boolean; onExport: () => void }) {
@@ -449,25 +473,29 @@ function SettingsPage({ members, loading, session, onAdd, onChangeStatus }: { me
   return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage finance-team access and review the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>{canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace('_', ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}<section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
 }
 
-function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onCloseCase, onPrint }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onCloseCase: () => void; onPrint: (pass: ReleasePass) => void }) {
+function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void }) {
   const assignedName = agentName(agentList, caseItem.assignedAgentId);
   const actionButton = () => {
-    if (caseItem.status === 'Imported' && !caseItem.authority) return <button className="primary-button full" onClick={() => onOpenDialog('authority')}><ShieldCheck size={16} /> Review recovery authority</button>;
-    if (caseItem.status === 'Imported' || caseItem.status === 'Unable to recover') return <button className="primary-button full" onClick={() => onOpenDialog('assign')}><UsersRound size={16} /> {caseItem.status === 'Imported' ? 'Assign seizure agent' : 'Reassign case'}</button>;
-    if (['Assigned', 'Accepted', 'Attempt in progress'].includes(caseItem.status)) return <div className="field-waiting"><Clock3 size={16} /> Awaiting the assigned agent’s field update.</div>;
-    if (['Recovered', 'Custody certificate issued', 'Payment pending'].includes(caseItem.status)) return <button className="primary-button full" onClick={() => onOpenDialog('payment')}><Check size={16} /> Confirm payment</button>;
-    if (caseItem.status === 'Payment confirmed') return <button className="primary-button full" onClick={() => onOpenDialog('release')}><FileCheck2 size={16} /> Create printable release pass</button>;
-    if (caseItem.status === 'Release pass printed') return <div className="drawer-actions vertical"><button className="secondary-button" disabled={!releasePass} onClick={() => releasePass && onPrint(releasePass)}><Printer size={15} /> Print customer pass</button><button className="primary-button" onClick={onCloseCase}><Check size={16} /> Mark vehicle released and close</button></div>;
-    return <div className="closed-note"><Check size={15} /> Case closed</div>;
+    const action = financeCaseAction({ status: caseItem.status, hasAuthority: Boolean(caseItem.authority), hasCustody: Boolean(custody), hasReleasePass: Boolean(releasePass) }, session.user.permissions);
+    if (action === 'authority') return <button className="primary-button full" onClick={() => onOpenDialog('authority')}><ShieldCheck size={16} /> Review recovery authority</button>;
+    if (action === 'assign') return <button className="primary-button full" onClick={() => onOpenDialog('assign')}><UsersRound size={16} /> {caseItem.status === 'Imported' ? 'Assign seizure agent' : 'Reassign case'}</button>;
+    if (action === 'waiting-field') return <div className="field-waiting"><Clock3 size={16} /> Awaiting the assigned agent’s field update.</div>;
+    if (action === 'waiting-custody') return <div className="field-waiting"><Clock3 size={16} /> Vehicle recovered; awaiting the agent’s custody certificate.</div>;
+    if (action === 'custody-review') return <button className="primary-button full" onClick={() => onOpenDialog('custody-review')}><PackageCheck size={16} /> Review custody report</button>;
+    if (action === 'payment') return <button className="primary-button full" onClick={() => onOpenDialog('payment')}><Check size={16} /> Confirm payment</button>;
+    if (action === 'release') return <button className="primary-button full" onClick={() => onOpenDialog('release')}><FileCheck2 size={16} /> Create printable release pass</button>;
+    if (action === 'print-close') return <div className="drawer-actions vertical"><button className="secondary-button" onClick={() => releasePass && onPrint(releasePass)}><Printer size={15} /> Print customer pass</button><button className="primary-button" onClick={() => onOpenDialog('close')}><Check size={16} /> Mark vehicle released and close</button></div>;
+    if (action === 'closed') return <div className="closed-note"><Check size={15} /> Case closed</div>;
+    return <div className="field-waiting"><ShieldCheck size={16} /> An authorised finance manager must complete the next step.</div>;
   };
-  return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer"><div className="drawer-top"><div><p className="eyebrow">{caseItem.id}</p><h2>{caseItem.borrower.name}</h2></div><button className="close-button" onClick={onClose}><X size={18} /></button></div><StatusPill status={caseItem.status} />
+  return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer" role="dialog" aria-modal="true" aria-labelledby="case-drawer-title"><div className="drawer-top"><div><p className="eyebrow">{caseItem.id}</p><h2 id="case-drawer-title">{caseItem.borrower.name}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label="Close case details"><X size={18} /></button></div><StatusPill status={caseItem.status} />
     <div className="drawer-section"><p className="section-label">Borrower</p><div className="detail-list"><span><UsersRound size={14} /> {caseItem.borrower.mobile}</span><span><MapPin size={14} /> {caseItem.borrower.address}</span></div></div>
     <div className="drawer-section"><p className="section-label">Vehicle and loan</p><div className="vehicle-card"><span>{caseItem.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><strong>{caseItem.vehicle.registration}</strong><p>{caseItem.vehicle.makeModel}</p></div></div><dl className="detail-grid"><div><dt>Pending amount</dt><dd>{formatCurrency(caseItem.pendingAmount)}</dd></div><div><dt>Overdue</dt><dd>{caseItem.overdueDays} days</dd></div><div><dt>Loan account</dt><dd>{caseItem.accountNumber}</dd></div><div><dt>Chassis</dt><dd>{caseItem.vehicle.chassis}</dd></div></dl>{session.user.permissions.includes('account.manage') && caseItem.status === 'Imported' && !caseItem.authority && <button className="text-button edit-account" onClick={() => onOpenDialog('edit-account')}>Edit account before approval <ChevronRight size={14} /></button>}</div>
     <div className="drawer-section"><p className="section-label">Recovery authority</p>{caseItem.authority ? <div className="payment-detail"><ShieldCheck size={16} /><div><strong>Approved by finance</strong><span>{caseItem.authority.documentName}</span><small>{new Date(caseItem.authority.approvedAt).toLocaleString()}</small></div></div> : <div className="evidence-empty">No authority document approved yet.</div>}</div>
     <div className="drawer-section"><p className="section-label">Assignment</p><div className="assignment-detail"><span className="agent-avatar small">{assignedName.split(' ').map((word) => word[0]).join('')}</span><div><strong>{assignedName}</strong><small>{caseItem.assignedAt ? new Date(caseItem.assignedAt).toLocaleString() : 'Waiting for finance assignment'}</small></div></div></div>
     {caseItem.failure && <div className="failure-note"><span>!</span><div><strong>{caseItem.failure.reason}</strong><p>{caseItem.failure.note}</p><small>{caseItem.failure.recordedAt}</small></div></div>}
     {(evidenceLoading || evidence.length > 0) && <EvidencePanel evidence={evidence} loading={evidenceLoading} token={session.token} />}
-    {custody && <div className="drawer-section"><p className="section-label">Digital parking check slip</p><div className="custody-summary"><PackageCheck size={17} /><div><strong>{custody.id}</strong><p>{custody.yardName}</p><small>{custody.agentName} · ₹{custody.parkingRate}/day · {new Date(custody.arrivalTime).toLocaleString()}</small></div></div>{custody.inspection && <div className="inspection-summary">{Object.entries(custody.inspection).map(([item, condition]) => <span key={item}><strong>{item}</strong><small>{condition}</small></span>)}</div>}{custody.financeReviewedAt && <div className="payment-detail"><Check size={16} /><div><strong>Approved by finance</strong><span>{custody.financeReviewNote || 'Custody report accepted'}</span><small>{new Date(custody.financeReviewedAt).toLocaleString()}</small></div></div>}</div>}
+    {custody && <div className="drawer-section"><p className="section-label">Digital parking check slip</p><div className="custody-summary"><PackageCheck size={17} /><div><strong>{custody.id}</strong><p>{custody.yardName}</p><small>{custody.agentName} · ₹{custody.parkingRate}/day · {new Date(custody.arrivalTime).toLocaleString()}</small></div></div>{custody.inspection && <div className="inspection-summary">{Object.entries(custody.inspection).map(([item, condition]) => <span key={item}><strong>{item}</strong><small>{condition}</small></span>)}</div>}{custody.customNote && <p className="custody-agent-note"><strong>Agent note</strong>{custody.customNote}</p>}{custody.financeReviewedAt && <div className="payment-detail"><Check size={16} /><div><strong>Approved by finance</strong><span>{custody.financeReviewNote || 'Custody report accepted'}</span><small>{new Date(custody.financeReviewedAt).toLocaleString()}</small></div></div>}</div>}
     {caseItem.paymentReference && <div className="drawer-section"><p className="section-label">Finance payment confirmation</p><div className="payment-detail"><Check size={16} /><div><strong>Dues marked cleared</strong><span>{caseItem.paymentReference}</span><small>{caseItem.paymentConfirmedAt ? new Date(caseItem.paymentConfirmedAt).toLocaleString() : ''}</small></div></div></div>}
     {releasePass && <div className="drawer-section"><p className="section-label">Customer release token</p><div className="pass-summary"><FileCheck2 size={17} /><div><strong>{releasePass.id}</strong><span>Verification code: {releasePass.verificationCode}</span><small>Issued {new Date(releasePass.issuedAt).toLocaleString()}</small></div></div></div>}
     <div className="drawer-footer">{actionButton()}</div>
@@ -495,7 +523,18 @@ function PrintableReleasePass({ pass, caseItem, custody, tenantName }: { pass: R
 }
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><div><p className="eyebrow">Finance-controlled workflow</p><h2>{title}</h2></div><button className="close-button" onClick={onClose}><X size={18} /></button></div>{children}</section></div>;
+  const titleId = useId();
+  const modalRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modalRef.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => { window.removeEventListener('keydown', closeOnEscape); previousFocus?.focus(); };
+  }, [onClose]);
+
+  return <div className="modal-backdrop" role="presentation"><section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}><div className="modal-heading"><div><p className="eyebrow">Finance-controlled workflow</p><h2 id={titleId}>{title}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label={`Close ${title}`}><X size={18} /></button></div>{children}</section></div>;
 }
 
 function ImportDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
@@ -532,8 +571,11 @@ function PaymentDialog({ caseItem, onClose, onConfirm }: { caseItem: RecoveryCas
 }
 
 function ReleaseDialog({ caseItem, onClose, onConfirm }: { caseItem: RecoveryCase; onClose: () => void; onConfirm: () => void }) {
-  const passId = `RP-26${caseItem.id.slice(-4)}`;
-  return <Modal title="Create printable release pass" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(); }}><p className="modal-copy">Give this receipt to the customer after payment is confirmed. The parking yard can verify the printed details manually in version 1.</p><div className="release-pass-preview"><div><p>VEHICLE RELEASE PASS</p><strong>{passId}</strong><span>{caseItem.vehicle.registration}</span></div><div className="qr-placeholder">QR</div><small>Issued for {caseItem.borrower.name}<br />One-time manual handover receipt</small></div><label className="check-line"><input id="release-confirmation" required type="checkbox" /> I confirm payment clearance and customer details have been verified.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><FileCheck2 size={15} /> Generate pass</button></div></form></Modal>;
+  return <Modal title="Create printable release pass" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(); }}><p className="modal-copy">Give this receipt to the customer after payment is confirmed. The parking yard can verify the printed details manually in version 1.</p><div className="release-pass-preview"><div><p>VEHICLE RELEASE PASS</p><strong>Generated securely</strong><span>{caseItem.vehicle.registration}</span></div><div className="qr-placeholder"><ShieldCheck size={18} /></div><small>Issued for {caseItem.borrower.name}<br />A unique pass ID and one-time verification code will be recorded.</small></div><label className="check-line"><input id="release-confirmation" required type="checkbox" /> I confirm payment clearance and customer details have been verified.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><FileCheck2 size={15} /> Generate pass</button></div></form></Modal>;
+}
+
+function CloseCaseDialog({ caseItem, onClose, onConfirm }: { caseItem: RecoveryCase; onClose: () => void; onConfirm: () => void }) {
+  return <Modal title="Confirm vehicle release and close" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(); }}><p className="modal-copy">Close this case only after the customer’s printed release pass has been checked and the vehicle handover has actually been completed.</p><div className="case-reference"><strong>{caseItem.releasePassId}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="check-line"><input required type="checkbox" /> I confirm the vehicle was released against the recorded pass and this case can be closed.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Check size={15} /> Confirm release and close</button></div></form></Modal>;
 }
 
 export default App;

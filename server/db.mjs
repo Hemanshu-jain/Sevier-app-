@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { normalizeIndiaMobile } from './otp-service.mjs';
 import { ensureMonthlyImportSchema } from './monthly-import.mjs';
+import { ensureWorkflowIntegrity } from './workflow-persistence.mjs';
+import { ensureFieldMutationSchema } from './field-mutations.mjs';
+import { ensureNotificationAccessSchema } from './notification-access.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const dataDirectory = join(directory, 'data');
@@ -121,6 +124,8 @@ db.exec(`
     applied_at TEXT NOT NULL
   );
 `);
+ensureWorkflowIntegrity(db);
+ensureNotificationAccessSchema(db);
 
 const custodyColumns = db.prepare('PRAGMA table_info(custody_records)').all().map((column) => column.name);
 if (!custodyColumns.includes('inspection_json')) {
@@ -144,6 +149,9 @@ const currentCustodyColumns = db.prepare('PRAGMA table_info(custody_records)').a
 if (!currentCustodyColumns.includes('finance_reviewed_at')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_reviewed_at TEXT');
 if (!currentCustodyColumns.includes('finance_reviewed_by_user_id')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_reviewed_by_user_id TEXT REFERENCES users(id)');
 if (!currentCustodyColumns.includes('finance_review_note')) db.exec('ALTER TABLE custody_records ADD COLUMN finance_review_note TEXT');
+if (!currentCustodyColumns.includes('custom_note')) db.exec('ALTER TABLE custody_records ADD COLUMN custom_note TEXT');
+
+ensureFieldMutationSchema(db);
 
 ensureMonthlyImportSchema(db);
 
@@ -212,13 +220,19 @@ function seedIfEmpty() {
   insertCustody.run('CT-260078', 'tenant-aarya', 'RC-260787', 'Sri Lakshmi Parking, Yeshwanthpur', '2026-08-05T18:25:00.000Z', 350, '2026-08-05T18:41:00.000Z', 'Naveen Reddy', 14);
   insertCustody.run('CT-260077', 'tenant-aarya', 'RC-260774', 'Sri Lakshmi Parking, Yeshwanthpur', '2026-08-05T15:18:00.000Z', 350, '2026-08-05T15:32:00.000Z', 'Ayesha Shaikh', 14);
 
-  const insertNotification = db.prepare('INSERT INTO notifications (id, tenant_id, recipient_user_id, title, detail, created_at, read, tone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  insertNotification.run('n-1', 'tenant-aarya', null, 'Custody report submitted', 'RC-260787 was submitted by Naveen Reddy and is awaiting your review.', '2026-08-10T11:42:00.000Z', 0, 'green');
-  insertNotification.run('n-2', 'tenant-aarya', null, 'Recovery attempt could not be completed', 'RC-260792 was marked Vehicle not found with a field note.', '2026-08-10T10:25:00.000Z', 0, 'amber');
-  insertNotification.run('n-3', 'tenant-aarya', 'agent-1', 'New case assigned', 'RC-260801 was assigned to Ravi Kumar.', '2026-08-10T09:12:00.000Z', 0, 'blue');
+  const insertNotification = db.prepare('INSERT INTO notifications (id, tenant_id, recipient_user_id, case_id, title, detail, created_at, read, tone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  insertNotification.run('n-1', 'tenant-aarya', null, 'RC-260787', 'Custody report submitted', 'RC-260787 was submitted by Naveen Reddy and is awaiting your review.', '2026-08-10T11:42:00.000Z', 0, 'green');
+  insertNotification.run('n-2', 'tenant-aarya', null, 'RC-260792', 'Recovery attempt could not be completed', 'RC-260792 was marked Vehicle not found with a field note.', '2026-08-10T10:25:00.000Z', 0, 'amber');
+  insertNotification.run('n-3', 'tenant-aarya', 'agent-1', 'RC-260801', 'New case assigned', 'RC-260801 was assigned to Ravi Kumar.', '2026-08-10T09:12:00.000Z', 0, 'blue');
 }
 
 seedIfEmpty();
+
+db.exec(`UPDATE notifications SET case_id = CASE id
+  WHEN 'n-1' THEN 'RC-260787'
+  WHEN 'n-2' THEN 'RC-260792'
+  WHEN 'n-3' THEN 'RC-260801'
+END WHERE tenant_id = 'tenant-aarya' AND id IN ('n-1', 'n-2', 'n-3') AND case_id IS NULL;`);
 
 db.prepare(`INSERT OR IGNORE INTO users (id, tenant_id, role, name, email, password_hash, mobile, city)
   SELECT 'user-staff', tenant_id, 'finance_staff', 'Nisha Verma', 'staff@aaryafinance.test', password_hash, '+91 98450 11113', 'Bengaluru'
@@ -255,6 +269,7 @@ db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, 
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('006-otp-sessions', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('007-monthly-import-snapshots', now());
 db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('008-assignment-notes', now());
+db.prepare('INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)').run('009-mobile-field-offline', now());
 
 function backupFileName() {
   return `seizer-${new Date().toISOString().slice(0, 10)}.db`;
@@ -277,7 +292,7 @@ export function addAudit({ tenantId, caseId = null, actorUserId, action, detail 
   db.prepare('INSERT INTO audit_events (tenant_id, case_id, actor_user_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(tenantId, caseId, actorUserId, action, detail, now());
 }
 
-export function addNotification({ tenantId, recipientUserId = null, title, detail, tone }) {
+export function addNotification({ tenantId, recipientUserId = null, caseId = null, title, detail, tone }) {
   const id = `n-${crypto.randomUUID()}`;
-  db.prepare('INSERT INTO notifications (id, tenant_id, recipient_user_id, title, detail, created_at, read, tone) VALUES (?, ?, ?, ?, ?, ?, 0, ?)').run(id, tenantId, recipientUserId, title, detail, now(), tone);
+  db.prepare('INSERT INTO notifications (id, tenant_id, recipient_user_id, case_id, title, detail, created_at, read, tone) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)').run(id, tenantId, recipientUserId, caseId, title, detail, now(), tone);
 }

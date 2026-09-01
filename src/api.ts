@@ -1,4 +1,5 @@
 import type { Agent, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import { apiUrl } from './api-origin.ts';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent';
 
@@ -63,6 +64,16 @@ export interface AccountInput {
 
 const sessionKey = 'handoff-session';
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 export function storedSession(): Session | null {
   try {
     const value = localStorage.getItem(sessionKey);
@@ -81,7 +92,7 @@ export function clearSession() {
 }
 
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path, import.meta.env.VITE_API_ORIGIN), {
     ...options,
     headers: {
       ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
@@ -91,7 +102,7 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || 'The request could not be completed.');
+    throw new ApiError(error.error || 'The request could not be completed.', response.status);
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
@@ -111,7 +122,7 @@ export const api = {
   createMember: (token: string, values: { name: string; mobile: string; city: string; role: string }) => request<{ member: FinanceMember }>('/api/members', { method: 'POST', body: JSON.stringify(values) }, token),
   setMemberActive: (token: string, memberId: string, active: boolean) => request<{ member: FinanceMember }>(`/api/members/${memberId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
   caseReport: async (token: string) => {
-    const response = await fetch('/api/reports/cases.csv', { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(apiUrl('/api/reports/cases.csv', import.meta.env.VITE_API_ORIGIN), { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error('The case report could not be exported.');
     return response.blob();
   },
@@ -127,8 +138,8 @@ export const api = {
     return request<{ case: RecoveryCase }>(`/api/cases/${caseId}/authority-approval`, { method: 'POST', body }, token);
   },
   assignCase: (token: string, caseId: string, agentId: string, assignmentNote: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentId, assignmentNote }) }, token),
-  recordAttempt: (token: string, caseId: string, reason: string, note: string, location?: { latitude: number; longitude: number }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/attempt`, { method: 'POST', body: JSON.stringify({ reason, note, ...location }) }, token),
-  recordCustody: (token: string, caseId: string, values: { yardName: string; arrivalTime: string; parkingRate: number; checklist: number; inspection: Record<string, string>; latitude?: number; longitude?: number }) => request<{ case: RecoveryCase; custody: CustodyRecord }>(`/api/cases/${caseId}/custody`, { method: 'POST', body: JSON.stringify(values) }, token),
+  recordAttempt: (token: string, caseId: string, reason: string, note: string, mutationId: string, location?: { latitude: number; longitude: number }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/attempt`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body: JSON.stringify({ reason, note, ...location }) }, token),
+  recordCustody: (token: string, caseId: string, values: { yardName: string; arrivalTime: string; parkingRate: number; checklist: number; inspection: Record<string, string>; customNote?: string; latitude?: number; longitude?: number }, mutationId: string) => request<{ case: RecoveryCase; custody: CustodyRecord }>(`/api/cases/${caseId}/custody`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body: JSON.stringify(values) }, token),
   approveCustody: (token: string, caseId: string, note: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/custody-review`, { method: 'POST', body: JSON.stringify({ note }) }, token),
   confirmPayment: (token: string, caseId: string, reference: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/payment-confirmation`, { method: 'POST', body: JSON.stringify({ reference }) }, token),
   releasePass: (token: string, caseId: string) => request<{ case: RecoveryCase; releasePass: ReleasePass }>(`/api/cases/${caseId}/release-pass`, { method: 'POST' }, token),
@@ -136,15 +147,15 @@ export const api = {
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
   evidence: (token: string, caseId: string) => request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, {}, token),
   evidenceFile: async (token: string, evidenceId: string) => {
-    const response = await fetch(`/api/evidence/${evidenceId}/file`, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(apiUrl(`/api/evidence/${evidenceId}/file`, import.meta.env.VITE_API_ORIGIN), { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error('The secured evidence file could not be loaded.');
     return response.blob();
   },
-  uploadEvidence: (token: string, caseId: string, files: File[], location?: { latitude: number; longitude: number }) => {
+  uploadEvidence: (token: string, caseId: string, files: File[], mutationId: string, capturedAt: string, location?: { latitude: number; longitude: number }) => {
     const body = new FormData();
     files.forEach((file) => body.append('files', file));
-    body.append('capturedAt', new Date().toISOString());
+    body.append('capturedAt', capturedAt);
     if (location) { body.append('latitude', String(location.latitude)); body.append('longitude', String(location.longitude)); }
-    return request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, { method: 'POST', body }, token);
+    return request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body }, token);
   },
 };

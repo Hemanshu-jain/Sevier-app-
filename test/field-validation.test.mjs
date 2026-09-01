@@ -22,4 +22,6 @@ test('custody requires evidence and the complete known inspection checklist', ()
   assert.equal(validateCustody(activeCase, values), null);
   assert.match(validateCustody(activeCase, { ...values, evidenceCount: 0 }), /evidence/i);
   assert.match(validateCustody(activeCase, { ...values, inspection: { ...inspection, Battery: 'Unknown' } }), /condition check/i);
+  assert.equal(validateCustody(activeCase, { ...values, customNote: 'Left mirror scratched.' }), null);
+  assert.match(validateCustody(activeCase, { ...values, customNote: 'x'.repeat(2001) }), /note/i);
 });

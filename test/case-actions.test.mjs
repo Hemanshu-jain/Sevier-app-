@@ -17,6 +17,7 @@ test('authority approval requires an imported case and a document', () => {
 
 test('custody review must precede payment confirmation', () => {
   assert.equal(validateCaseAction('approve_custody', { status: 'Custody review' }), null);
+  assert.equal(validateCaseAction('approve_custody', { status: 'Custody certificate issued' }), null);
   assert.match(validateCaseAction('confirm_payment', { status: 'Custody review' }), /approve custody/i);
   assert.equal(validateCaseAction('confirm_payment', { status: 'Payment pending' }), null);
 });

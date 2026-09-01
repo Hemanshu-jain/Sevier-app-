@@ -21,6 +21,9 @@ import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
 import { validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
+import { persistCustody, persistReleasePass } from './workflow-persistence.mjs';
+import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from './field-mutations.mjs';
+import { listNotifications, markNotificationsRead } from './notification-access.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -90,11 +93,11 @@ function mapCase(row) {
 }
 
 function mapCustody(row) {
-  return { id: row.id, caseId: row.case_id, vehicleCondition: 'Verified', yardName: row.yard_name, arrivalTime: row.arrival_time, parkingRate: row.parking_rate, createdAt: row.created_at, agentName: row.agent_name, checklist: row.checklist_count, inspection: row.inspection_json ? JSON.parse(row.inspection_json) : undefined, financeReviewedAt: row.finance_reviewed_at ?? undefined, financeReviewNote: row.finance_review_note ?? undefined };
+  return { id: row.id, caseId: row.case_id, vehicleCondition: 'Verified', yardName: row.yard_name, arrivalTime: row.arrival_time, parkingRate: row.parking_rate, createdAt: row.created_at, agentName: row.agent_name, checklist: row.checklist_count, inspection: row.inspection_json ? JSON.parse(row.inspection_json) : undefined, customNote: row.custom_note ?? undefined, financeReviewedAt: row.finance_reviewed_at ?? undefined, financeReviewNote: row.finance_review_note ?? undefined };
 }
 
 function mapNotification(row) {
-  return { id: row.id, title: row.title, detail: row.detail, createdAt: row.created_at, read: Boolean(row.read), tone: row.tone };
+  return { id: row.id, caseId: row.case_id ?? undefined, title: row.title, detail: row.detail, createdAt: row.created_at, read: Boolean(row.read), tone: row.tone };
 }
 
 function mapEvidence(row) {
@@ -149,6 +152,27 @@ function requireActiveFieldCase(req, res, next) {
   return error ? res.status(422).json({ error }) : next();
 }
 
+function requireFieldMutation(operation) {
+  return (req, res, next) => {
+    const key = String(req.get('Idempotency-Key') || '').trim();
+    const validationError = validateIdempotencyKey(key);
+    if (validationError) return res.status(422).json({ error: validationError });
+    try {
+      const identity = { tenantId: req.user.tenantId, userId: req.user.id, key, caseId: req.recoveryCase.id, operation };
+      const receipt = readFieldMutation(db, identity);
+      if (receipt) return res.status(receipt.statusCode).json(receipt.body);
+      req.fieldMutation = identity;
+      return next();
+    } catch (error) {
+      return res.status(409).json({ error: error instanceof Error ? error.message : 'The field request conflicts with an earlier operation.' });
+    }
+  };
+}
+
+function deleteUploads(files) {
+  for (const file of files) if (existsSync(file.path)) unlinkSync(file.path);
+}
+
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.post('/api/auth/request-otp', async (req, res) => {
@@ -201,7 +225,7 @@ app.get('/api/workspace', auth, (req, res) => {
     : db.prepare('SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC').all(req.user.tenantId);
   const agentRows = req.user.role === 'agent' ? [] : db.prepare(`SELECT id, name, mobile, city, active FROM users WHERE tenant_id = ? AND role = 'agent' ORDER BY name`).all(req.user.tenantId);
   const agentData = agentRows.map((agent) => mapAgent(agent, caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status !== 'Closed').length));
-  const notificationRows = db.prepare('SELECT * FROM notifications WHERE tenant_id = ? AND (recipient_user_id IS NULL OR recipient_user_id = ?) ORDER BY created_at DESC LIMIT 50').all(req.user.tenantId, req.user.id);
+  const notificationRows = listNotifications(db, req.user);
   const releasePassRows = req.user.role === 'agent' ? [] : db.prepare(`SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC`).all(req.user.tenantId);
   res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map(mapReleasePass) });
 });
@@ -341,7 +365,7 @@ app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSION
   const sha256 = createHash('sha256').update(fileBytes).digest('hex');
   db.prepare(`UPDATE recovery_cases SET authority_document_file_name = ?, authority_document_original_name = ?, authority_document_mime_type = ?, authority_document_byte_size = ?, authority_document_sha256 = ?, authority_approved_at = ?, authority_approved_by_user_id = ?, status = 'Imported', updated_at = ? WHERE id = ? AND tenant_id = ?`).run(req.file.filename, req.file.originalname, req.file.mimetype, req.file.size, sha256, approvedAt, req.user.id, approvedAt, req.recoveryCase.id, req.user.tenantId);
   addAudit({ tenantId: req.user.tenantId, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'authority.approved', detail: `Authority document ${req.file.originalname} approved for assignment.` });
-  addNotification({ tenantId: req.user.tenantId, title: 'Recovery authority approved', detail: `${req.recoveryCase.id} is ready to assign.`, tone: 'green' });
+  addNotification({ tenantId: req.user.tenantId, caseId: req.recoveryCase.id, title: 'Recovery authority approved', detail: `${req.recoveryCase.id} is ready to assign.`, tone: 'green' });
   return res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(req.recoveryCase.id, req.user.tenantId)) });
 });
 
@@ -356,46 +380,64 @@ app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_AS
   if (!agent) return res.status(422).json({ error: 'Choose an active agent from this finance company.' });
   const updatedAt = isoNow();
   db.prepare(`UPDATE recovery_cases SET status = 'Assigned', assigned_agent_user_id = ?, assigned_at = ?, assignment_note = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL WHERE id = ? AND tenant_id = ?`).run(agent.id, updatedAt, assignmentNote || null, updatedAt, caseRow.id, req.user.tenantId);
-  addNotification({ tenantId: req.user.tenantId, recipientUserId: agent.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
+  addNotification({ tenantId: req.user.tenantId, recipientUserId: agent.id, caseId: caseRow.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
   addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agent.name}.${assignmentNote ? ` Instruction: ${assignmentNote}` : ''}` });
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
 
-app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_SUBMIT), (req, res) => {
-  const caseRow = caseForUser(req.params.id, req.user);
+app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_SUBMIT), requireAssignedCase, requireFieldMutation('attempt'), requireActiveFieldCase, (req, res) => {
+  const caseRow = req.recoveryCase;
   const reason = String(req.body?.reason || 'Other');
   const note = String(req.body?.note || '').trim();
-  if (!caseRow) return res.status(404).json({ error: 'Assigned recovery case not found.' });
   const validationError = validateAttempt(caseRow, { reason, note });
   if (validationError) return res.status(422).json({ error: validationError });
   const updatedAt = isoNow();
-  db.prepare(`UPDATE recovery_cases SET status = 'Unable to recover', failure_reason = ?, failure_note = ?, failure_recorded_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(reason, note, updatedAt, updatedAt, caseRow.id, req.user.tenantId);
-  addNotification({ tenantId: req.user.tenantId, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
   const latitude = Number(req.body?.latitude);
   const longitude = Number(req.body?.longitude);
   const locationDetail = Number.isFinite(latitude) && Number.isFinite(longitude) ? ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.` : '';
-  addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'attempt.failed', detail: `${reason}: ${note}${locationDetail}` });
-  res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
+  const body = runTransaction(db, () => {
+    db.prepare(`UPDATE recovery_cases SET status = 'Unable to recover', failure_reason = ?, failure_note = ?, failure_recorded_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(reason, note, updatedAt, updatedAt, caseRow.id, req.user.tenantId);
+    addNotification({ tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
+    addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'attempt.failed', detail: `${reason}: ${note}${locationDetail}` });
+    const response = { case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) };
+    saveFieldMutation(db, { ...req.fieldMutation, statusCode: 200, body: response, createdAt: updatedAt });
+    return response;
+  });
+  res.json(body);
 });
 
-app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, requireActiveFieldCase, upload.array('files', 5), (req, res) => {
+app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, requireFieldMutation('evidence'), requireActiveFieldCase, upload.array('files', 5), (req, res, next) => {
   const files = req.files ?? [];
   if (!files.length) return res.status(422).json({ error: 'Capture at least one photo or video before uploading.' });
   if (files.some((file) => !isAllowedEvidenceFile(readFileSync(file.path), file.mimetype))) {
-    files.forEach((file) => unlinkSync(file.path));
+    deleteUploads(files);
     return res.status(422).json({ error: 'Upload valid JPG, PNG, WebP, MP4, or WebM evidence files only.' });
   }
   const latitude = Number(req.body?.latitude);
   const longitude = Number(req.body?.longitude);
   const capturedAt = String(req.body?.capturedAt || isoNow());
-  const insert = db.prepare('INSERT INTO evidence (id, tenant_id, case_id, agent_user_id, file_name, original_name, mime_type, byte_size, latitude, longitude, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  const records = files.map((file) => {
-    const id = `ev-${crypto.randomUUID()}`;
-    insert.run(id, req.user.tenantId, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, Number.isFinite(latitude) ? latitude : null, Number.isFinite(longitude) ? longitude : null, capturedAt);
-    return mapEvidence(db.prepare('SELECT * FROM evidence WHERE id = ?').get(id));
-  });
-  addAudit({ tenantId: req.user.tenantId, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'evidence.uploaded', detail: `${records.length} field evidence file(s) captured.` });
-  res.status(201).json({ evidence: records });
+  if (Number.isNaN(Date.parse(capturedAt))) {
+    deleteUploads(files);
+    return res.status(422).json({ error: 'Evidence capture time is invalid.' });
+  }
+  try {
+    const body = runTransaction(db, () => {
+      const insert = db.prepare('INSERT INTO evidence (id, tenant_id, case_id, agent_user_id, file_name, original_name, mime_type, byte_size, latitude, longitude, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const records = files.map((file) => {
+        const id = `ev-${crypto.randomUUID()}`;
+        insert.run(id, req.user.tenantId, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, Number.isFinite(latitude) ? latitude : null, Number.isFinite(longitude) ? longitude : null, capturedAt);
+        return mapEvidence(db.prepare('SELECT * FROM evidence WHERE id = ?').get(id));
+      });
+      addAudit({ tenantId: req.user.tenantId, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'evidence.uploaded', detail: `${records.length} field evidence file(s) captured.` });
+      const response = { evidence: records };
+      saveFieldMutation(db, { ...req.fieldMutation, statusCode: 201, body: response, createdAt: isoNow() });
+      return response;
+    });
+    return res.status(201).json(body);
+  } catch (error) {
+    deleteUploads(files);
+    return next(error);
+  }
 });
 
 app.get('/api/cases/:id/evidence', auth, (req, res) => {
@@ -411,27 +453,31 @@ app.get('/api/evidence/:id/file', auth, (req, res) => {
   res.type(evidence.mime_type).sendFile(join(uploadDirectory, evidence.file_name));
 });
 
-app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), (req, res) => {
-  const caseRow = caseForUser(req.params.id, req.user);
+app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_SUBMIT), requireAssignedCase, requireFieldMutation('custody'), requireActiveFieldCase, (req, res) => {
+  const caseRow = req.recoveryCase;
   const yardName = String(req.body?.yardName || '').trim();
   const arrivalTime = String(req.body?.arrivalTime || '').trim();
   const parkingRate = Number(req.body?.parkingRate);
   const checklist = Number(req.body?.checklist || 0);
   const inspection = req.body?.inspection && typeof req.body.inspection === 'object' ? req.body.inspection : null;
-  if (!caseRow) return res.status(404).json({ error: 'Assigned recovery case not found.' });
+  const customNote = String(req.body?.customNote || '').trim();
   const evidenceCount = db.prepare('SELECT COUNT(*) AS count FROM evidence WHERE tenant_id = ? AND case_id = ?').get(req.user.tenantId, caseRow.id).count;
-  const validationError = validateCustody(caseRow, { yardName, arrivalTime, parkingRate, checklist, inspection, evidenceCount });
+  const validationError = validateCustody(caseRow, { yardName, arrivalTime, parkingRate, checklist, inspection, evidenceCount, customNote });
   if (validationError) return res.status(422).json({ error: validationError });
-  const id = `CT-${String(Date.now()).slice(-8)}`;
+  const id = `CT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const createdAt = isoNow();
-  db.prepare('INSERT INTO custody_records (id, tenant_id, case_id, yard_name, arrival_time, parking_rate, created_at, agent_name, checklist_count, inspection_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.user.tenantId, caseRow.id, yardName, arrivalTime, parkingRate, createdAt, req.user.name, checklist, JSON.stringify(inspection));
-  db.prepare(`UPDATE recovery_cases SET status = 'Custody review', custody_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(id, createdAt, caseRow.id, req.user.tenantId);
-  addNotification({ tenantId: req.user.tenantId, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
   const latitude = Number(req.body?.latitude);
   const longitude = Number(req.body?.longitude);
   const locationDetail = Number.isFinite(latitude) && Number.isFinite(longitude) ? ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.` : '';
-  addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
-  res.status(201).json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)), custody: mapCustody(db.prepare('SELECT * FROM custody_records WHERE id = ?').get(id)) });
+  const body = runTransaction(db, () => {
+    persistCustody(db, { id, tenantId: req.user.tenantId, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote });
+    addNotification({ tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
+    addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
+    const response = { case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)), custody: mapCustody(db.prepare('SELECT * FROM custody_records WHERE id = ?').get(id)) };
+    saveFieldMutation(db, { ...req.fieldMutation, statusCode: 201, body: response, createdAt });
+    return response;
+  });
+  res.status(201).json(body);
 });
 
 app.post('/api/cases/:id/custody-review', auth, requirePermission(PERMISSIONS.CUSTODY_REVIEW), (req, res) => {
@@ -448,7 +494,7 @@ app.post('/api/cases/:id/custody-review', auth, requirePermission(PERMISSIONS.CU
     db.prepare(`UPDATE recovery_cases SET status = 'Payment pending', updated_at = ? WHERE id = ? AND tenant_id = ?`).run(reviewedAt, caseRow.id, req.user.tenantId);
     addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.approved', detail: note || 'Finance approved the custody report.' });
   });
-  addNotification({ tenantId: req.user.tenantId, title: 'Custody report approved', detail: `${caseRow.id} can proceed to payment confirmation.`, tone: 'green' });
+  addNotification({ tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Custody report approved', detail: `${caseRow.id} can proceed to payment confirmation.`, tone: 'green' });
   return res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?').get(caseRow.id, req.user.tenantId)) });
 });
 
@@ -461,7 +507,7 @@ app.post('/api/cases/:id/payment-confirmation', auth, requirePermission(PERMISSI
   if (!reference) return res.status(422).json({ error: 'Payment reference is required.' });
   const updatedAt = isoNow();
   db.prepare(`UPDATE recovery_cases SET status = 'Payment confirmed', payment_cleared = 1, payment_reference = ?, payment_confirmed_at = ?, payment_confirmed_by_user_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(reference, updatedAt, req.user.id, updatedAt, caseRow.id, req.user.tenantId);
-  addNotification({ tenantId: req.user.tenantId, title: 'Payment confirmed', detail: `${caseRow.id} is ready for a printable customer release pass.`, tone: 'green' });
+  addNotification({ tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Payment confirmed', detail: `${caseRow.id} is ready for a printable customer release pass.`, tone: 'green' });
   addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'payment.confirmed', detail: `Manual finance reference: ${reference}` });
   res.json({ case: mapCase(db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id)) });
 });
@@ -476,9 +522,8 @@ app.post('/api/cases/:id/release-pass', auth, requirePermission(PERMISSIONS.RELE
   const passId = `RP-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const verificationCode = crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
   const updatedAt = isoNow();
-  db.prepare(`UPDATE recovery_cases SET status = 'Release pass printed', release_pass_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(passId, updatedAt, caseRow.id, req.user.tenantId);
-  db.prepare(`INSERT INTO release_passes (id, tenant_id, case_id, issued_by_user_id, verification_code, issued_at, borrower_name, borrower_mobile, vehicle_registration, vehicle_model, custody_id, payment_reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(passId, req.user.tenantId, caseRow.id, req.user.id, verificationCode, updatedAt, caseRow.borrower_name, caseRow.borrower_mobile, caseRow.registration, caseRow.make_model, caseRow.custody_id, caseRow.payment_reference);
-  addNotification({ tenantId: req.user.tenantId, title: 'Release pass issued', detail: `${passId} is ready to print for ${caseRow.borrower_name}.`, tone: 'green' });
+  persistReleasePass(db, { id: passId, tenantId: req.user.tenantId, caseId: caseRow.id, issuedByUserId: req.user.id, verificationCode, issuedAt: updatedAt, borrowerName: caseRow.borrower_name, borrowerMobile: caseRow.borrower_mobile, vehicleRegistration: caseRow.registration, vehicleModel: caseRow.make_model, custodyId: caseRow.custody_id, paymentReference: caseRow.payment_reference });
+  addNotification({ tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Release pass issued', detail: `${passId} is ready to print for ${caseRow.borrower_name}.`, tone: 'green' });
   addAudit({ tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'release_pass.issued', detail: `Issued ${passId}.` });
   const updatedCase = db.prepare('SELECT * FROM recovery_cases WHERE id = ?').get(caseRow.id);
   const releasePass = db.prepare(`SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.id = ?`).get(passId);
@@ -496,7 +541,7 @@ app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLO
 });
 
 app.post('/api/notifications/read-all', auth, (req, res) => {
-  db.prepare('UPDATE notifications SET read = 1 WHERE tenant_id = ? AND (recipient_user_id IS NULL OR recipient_user_id = ?)').run(req.user.tenantId, req.user.id);
+  markNotificationsRead(db, req.user, isoNow());
   res.status(204).end();
 });
 

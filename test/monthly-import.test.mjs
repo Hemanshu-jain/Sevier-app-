@@ -15,6 +15,7 @@ function createDatabase() {
       registration TEXT NOT NULL, make_model TEXT NOT NULL, chassis TEXT NOT NULL,
       vehicle_type TEXT NOT NULL, branch TEXT NOT NULL, pending_amount NUMERIC NOT NULL,
       overdue_days INTEGER NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+      authority_approved_at TEXT,
       payment_cleared INTEGER NOT NULL DEFAULT 0,
       UNIQUE (tenant_id, account_number)
     );
@@ -52,6 +53,28 @@ test('duplicate source files are idempotent', () => {
 
   assert.equal(duplicate.duplicate, true);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM monthly_account_snapshots').get().count, 1);
+  database.close();
+});
+
+test('re-import keeps approved borrower and vehicle identity immutable', () => {
+  const database = createDatabase();
+  const common = { database, tenantId: 'tenant-1', actorUserId: 'user-1', rejectedRows: 0 };
+  importMonthlyRows({ ...common, snapshotMonth: '2026-08-01', fileName: 'august.csv', fileSha256: 'hash-1', rows: [row] });
+  database.exec("UPDATE recovery_cases SET status = 'Assigned', authority_approved_at = '2026-08-28T10:00:00Z'");
+
+  importMonthlyRows({
+    ...common,
+    snapshotMonth: '2026-09-01',
+    fileName: 'september.csv',
+    fileSha256: 'hash-2',
+    rows: [{ ...row, borrowerName: 'Changed Name', registration: 'KA 99 ZZ 9999', pendingAmountPaise: 150000, overdueDays: 60 }],
+  });
+
+  const recoveryCase = database.prepare('SELECT borrower_name, registration, pending_amount, overdue_days FROM recovery_cases').get();
+  assert.equal(recoveryCase.borrower_name, 'Meera Iyer');
+  assert.equal(recoveryCase.registration, 'KA 01 MQ 4281');
+  assert.equal(recoveryCase.pending_amount, 1500);
+  assert.equal(recoveryCase.overdue_days, 60);
   database.close();
 });
 

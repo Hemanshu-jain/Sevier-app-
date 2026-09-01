@@ -63,12 +63,14 @@ export interface CustodyRecord {
   agentName: string;
   checklist: number;
   inspection?: Record<string, string>;
+  customNote?: string;
   financeReviewedAt?: string;
   financeReviewNote?: string;
 }
 
 export interface AppNotification {
   id: string;
+  caseId?: string;
   title: string;
   detail: string;
   createdAt: string;

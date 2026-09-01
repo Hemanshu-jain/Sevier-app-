@@ -1,0 +1,45 @@
+.field-header button,.field-home-actions button,.field-icon-action{min-width:44px;min-height:44px}
+.field-primary,.field-secondary,.field-location,.field-quick-actions a{min-height:44px}
+.field-home-actions{display:flex;align-items:center;gap:2px}
+.field-home-actions button{position:relative;display:grid;place-items:center;border:0;background:transparent;color:#d9e7fa}
+.field-home-actions i{position:absolute;top:1px;right:0;min-width:17px;height:17px;padding:0 3px;border:2px solid #102c51;border-radius:9px;background:#ef6b61;color:#fff;font:8px/13px Manrope,Arial,sans-serif;text-align:center}
+.field-connection{display:flex;align-items:center;gap:6px;margin-top:13px;color:#47718e;font-size:9px;font-weight:800}
+.field-summary.three{grid-template-columns:repeat(3,1fr);gap:6px}
+.field-summary.three span{padding:9px 7px}
+.field-summary span.attention{border-color:#e9bb7c;background:#fff8ed;color:#955a13}
+.field-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:10px;padding:3px;border-radius:8px;background:#e8eef5}
+.field-tabs button{min-height:44px;border:0;border-radius:6px;background:transparent;color:#697d95;font-size:10px;font-weight:800}
+.field-tabs button.active{background:#fff;color:#225fbf;box-shadow:0 1px 4px rgba(24,48,80,.12)}
+.field-screen-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.field-screen-title h1{margin-bottom:0}
+.field-text-action{min-height:44px;border:0;background:transparent;color:#2868cf;font-size:9px;font-weight:800}
+.field-text-action:disabled{color:#99a8b9}
+.field-icon-action{display:grid;place-items:center;border:1px solid #d5e1ef;border-radius:8px;background:#fff;color:#2868cf}
+.field-icon-action:disabled{color:#a1adba}
+.field-list{display:grid;gap:8px;margin-top:14px}
+.field-list-row{width:100%;display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #e0e7ef;border-radius:8px;background:#fff;color:#49627e;text-align:left}
+.field-list-row.unread{border-left:4px solid #2c6ed7}
+.field-list-row>svg{flex:none;color:#3973cf;margin-top:1px}
+.field-list-row>span{min-width:0;flex:1}
+.field-list-row strong,.field-list-row small,.field-list-row em,.field-list-row b{display:block}
+.field-list-row strong{font-size:10px;color:#2b435f}
+.field-list-row small{margin-top:3px;font-size:9px;line-height:1.45;color:#6d7f94}
+.field-list-row em{margin-top:5px;font-size:8px;font-style:normal;color:#94a1af}
+.field-list-row b{margin-top:6px;font-size:8px;line-height:1.45;color:#a84943}
+.field-empty{padding:20px 12px;border:1px dashed #cfd9e5;border-radius:8px;color:#74869b;font-size:10px;text-align:center}
+.field-complete-card{flex-wrap:wrap}
+.field-complete-card>div{flex:1}
+.field-complete-card .field-secondary{flex-basis:100%;color:#2467ca}
+.field-authority{display:flex;gap:8px;margin-top:11px;padding:10px;border:1px solid;border-radius:8px}
+.field-authority svg{flex:none}.field-authority strong{font-size:10px}.field-authority p{margin:2px 0 0;font-size:9px;line-height:1.5}
+.field-authority.approved{border-color:#cde8da;background:#effaf4;color:#1b785b}.field-authority.approved p{color:#517b6e}
+.field-authority.missing{border-color:#f0d0a0;background:#fff7e8;color:#956018}.field-authority.missing p{color:#806b4d}
+.field-file-row{display:flex;align-items:center;gap:6px}.field-file-row>span{min-width:0;flex:1}.field-file-row button{display:grid;place-items:center;flex:none;width:44px;height:44px;border:0;border-radius:6px;background:#f1f4f8;color:#6b7c91}
+.field-steps button:disabled{opacity:.46}
+.field-text-label input,.field-text-label textarea,.field-checklist-select select{min-height:44px;font-size:12px}
+.field-checklist-select select{height:44px}
+.field-confirm{min-height:44px}
+.field-confirm input{width:20px;height:20px}
+.field-app button:focus-visible,.field-app a:focus-visible,.field-app input:focus-visible,.field-app textarea:focus-visible,.field-app select:focus-visible{outline:3px solid #87b4ff;outline-offset:2px}
+.custody-agent-note{display:grid;gap:3px;margin:10px 0 0;padding:9px;border:1px solid #d9e5f3;border-radius:6px;background:#f7faff;color:#5e7085;font-size:9px;line-height:1.5}.custody-agent-note strong{color:#355578;font-size:9px}
+@media (max-width:370px){.field-home,.field-case{padding-left:12px;padding-right:12px}.field-summary.three{grid-template-columns:1fr 1fr}.field-summary.three span:last-child{grid-column:1/-1}.field-checklist-select label{grid-template-columns:1fr}.field-quick-actions{grid-template-columns:1fr}}

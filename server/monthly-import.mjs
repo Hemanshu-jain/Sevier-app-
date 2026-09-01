@@ -55,7 +55,11 @@ export function importMonthlyRows({ database, tenantId, actorUserId, snapshotMon
     for (const row of rows) {
       let recoveryCase = database.prepare(`SELECT * FROM recovery_cases WHERE tenant_id = ? AND account_number = ? AND status NOT IN ('Closed', 'Cancelled') ORDER BY updated_at DESC LIMIT 1`).get(tenantId, row.accountNumber);
       if (recoveryCase) {
-        database.prepare(`UPDATE recovery_cases SET borrower_name = ?, borrower_mobile = ?, borrower_address = ?, registration = ?, make_model = ?, chassis = ?, vehicle_type = ?, branch = ?, pending_amount = ?, overdue_days = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise / 100, row.overdueDays, createdAt, recoveryCase.id, tenantId);
+        if (recoveryCase.status === 'Imported' && !recoveryCase.authority_approved_at) {
+          database.prepare(`UPDATE recovery_cases SET borrower_name = ?, borrower_mobile = ?, borrower_address = ?, registration = ?, make_model = ?, chassis = ?, vehicle_type = ?, branch = ?, pending_amount = ?, overdue_days = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise / 100, row.overdueDays, createdAt, recoveryCase.id, tenantId);
+        } else {
+          database.prepare('UPDATE recovery_cases SET pending_amount = ?, overdue_days = ?, updated_at = ? WHERE id = ? AND tenant_id = ?').run(row.pendingAmountPaise / 100, row.overdueDays, createdAt, recoveryCase.id, tenantId);
+        }
         updated += 1;
       } else {
         const caseId = `RC-${snapshotMonth.slice(2, 7).replace('-', '')}-${randomUUID().slice(0, 6).toUpperCase()}`;

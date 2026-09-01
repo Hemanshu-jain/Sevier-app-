@@ -7,13 +7,18 @@
     "test": "node --test test/*.test.mjs",
     "dev": "concurrently -n api,web -c green,blue \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite",
-    "dev:api": "node --watch server/index.mjs",
+    "dev:api": "node server/index.mjs",
     "build": "tsc -b && vite build",
     "db:backup": "node server/backup.mjs",
     "preview": "vite preview",
-    "start": "node server/index.mjs"
+    "start": "node server/index.mjs",
+    "mobile:add": "cap add android",
+    "mobile:sync": "npm run build && cap sync android",
+    "mobile:open": "cap open android"
   },
   "dependencies": {
+    "@capacitor/android": "8.5.1",
+    "@capacitor/core": "8.5.1",
     "@vitejs/plugin-react": "latest",
     "bcryptjs": "latest",
     "concurrently": "latest",
@@ -27,11 +32,13 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.1",
     "@types/cors": "latest",
     "@types/express": "latest",
     "@types/multer": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "fake-indexeddb": "6.2.5",
     "typescript": "latest"
   }
 }
