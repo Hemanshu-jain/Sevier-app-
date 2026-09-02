@@ -1,16 +1,18 @@
 export type CaseStatus =
-  | 'Imported'
-  | 'Assigned'
-  | 'Accepted'
-  | 'Attempt in progress'
-  | 'Unable to recover'
-  | 'Recovered'
-  | 'Custody certificate issued'
-  | 'Custody review'
-  | 'Payment pending'
-  | 'Payment confirmed'
-  | 'Release pass printed'
-  | 'Closed';
+  | 'imported'
+  | 'assigned'
+  | 'unable_to_recover'
+  | 'custody_review'
+  | 'payment_pending'
+  | 'payment_confirmed'
+  | 'release_pass_printed'
+  | 'closed'
+  | 'cancelled';
+
+// Sentence-case a snake_case status for display (mirrors shared/contracts.mjs caseStatusLabel).
+export function caseStatusLabel(status: string) {
+  return status.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
+}
 
 export type AttemptReason =
   | 'Vehicle not found'

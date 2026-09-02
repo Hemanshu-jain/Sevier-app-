@@ -1,4 +1,4 @@
-const financeReviewStatuses = new Set(['Imported', 'Unable to recover', 'Custody review', 'Payment pending']);
+const financeReviewStatuses = new Set(['imported', 'unable_to_recover', 'custody_review', 'payment_pending']);
 
 export function financeReviewCases<T extends { status: string }>(cases: readonly T[]) {
   return cases.filter((item) => financeReviewStatuses.has(item.status));
@@ -7,10 +7,10 @@ export function financeReviewCases<T extends { status: string }>(cases: readonly
 export function recoveryPipeline(cases: readonly { status: string }[]) {
   const count = (...statuses: string[]) => cases.filter((item) => statuses.includes(item.status)).length;
   return [
-    { label: 'Import', count: count('Imported') },
-    { label: 'Field work', count: count('Assigned', 'Accepted', 'Attempt in progress', 'Unable to recover') },
-    { label: 'Custody', count: count('Recovered', 'Custody certificate issued', 'Custody review') },
-    { label: 'Payment', count: count('Payment pending', 'Payment confirmed') },
-    { label: 'Release', count: count('Release pass printed', 'Closed') },
+    { label: 'Import', count: count('imported') },
+    { label: 'Field work', count: count('assigned', 'unable_to_recover') },
+    { label: 'Custody', count: count('custody_review') },
+    { label: 'Payment', count: count('payment_pending', 'payment_confirmed') },
+    { label: 'Release', count: count('release_pass_printed', 'closed') },
   ];
 }

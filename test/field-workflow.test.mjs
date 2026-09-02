@@ -41,9 +41,9 @@ test('later workflow steps stay locked until prerequisites exist', () => {
 
 test('active and submitted agent work are separated', () => {
   const cases = [
-    { id: 'active', status: 'Assigned' },
-    { id: 'submitted-attempt', status: 'Unable to recover' },
-    { id: 'submitted-custody', status: 'Custody review' },
+    { id: 'active', status: 'assigned' },
+    { id: 'submitted-attempt', status: 'unable_to_recover' },
+    { id: 'submitted-custody', status: 'custody_review' },
   ];
   assert.deepEqual(filterAgentCases(cases, 'active').map((item) => item.id), ['active']);
   assert.deepEqual(filterAgentCases(cases, 'submitted').map((item) => item.id), ['submitted-attempt', 'submitted-custody']);

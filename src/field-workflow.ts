@@ -1,5 +1,5 @@
 const allowedEvidenceTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm']);
-const activeStatuses = new Set(['Assigned', 'Accepted', 'Attempt in progress']);
+const activeStatuses = new Set(['assigned']);
 
 export type FieldStep = 'verify' | 'evidence' | 'custody';
 export type FieldMutationStatus = 'pending' | 'syncing' | 'synced' | 'needs_attention';
