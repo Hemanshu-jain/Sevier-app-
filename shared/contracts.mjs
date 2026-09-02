@@ -1,17 +1,22 @@
+// Canonical case statuses: the real runtime lifecycle in lowercase snake_case.
+// Single source of truth for the PostgreSQL schema, API, and React display.
+// ponytail: the PG CHECK constraint lists these literally — keep the two in sync.
 export const CASE_STATUS = Object.freeze({
-  DRAFT: 'draft',
-  AWAITING_AUTHORITY: 'awaiting_authority',
-  READY_TO_ASSIGN: 'ready_to_assign',
-  AWAITING_AGENT: 'awaiting_agent',
-  IN_FIELD: 'in_field',
-  ATTEMPT_REVIEW: 'attempt_review',
+  IMPORTED: 'imported',
+  ASSIGNED: 'assigned',
+  UNABLE_TO_RECOVER: 'unable_to_recover',
   CUSTODY_REVIEW: 'custody_review',
   PAYMENT_PENDING: 'payment_pending',
   PAYMENT_CONFIRMED: 'payment_confirmed',
-  RELEASE_ISSUED: 'release_issued',
+  RELEASE_PASS_PRINTED: 'release_pass_printed',
   CLOSED: 'closed',
   CANCELLED: 'cancelled',
 });
+
+// Sentence-case the snake_case status for display. Reproduces every legacy label exactly.
+export function caseStatusLabel(status) {
+  return String(status).replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
+}
 
 export const PERMISSIONS = Object.freeze({
   ORGANIZATION_MANAGE: 'organization.manage',
@@ -81,21 +86,4 @@ const legacyRoles = Object.freeze({
 
 export function permissionsForRole(role) {
   return ROLE_TEMPLATES[legacyRoles[role] || role] || [];
-}
-
-const transitions = new Map([
-  [CASE_STATUS.DRAFT, [CASE_STATUS.AWAITING_AUTHORITY, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.AWAITING_AUTHORITY, [CASE_STATUS.READY_TO_ASSIGN, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.READY_TO_ASSIGN, [CASE_STATUS.AWAITING_AGENT, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.AWAITING_AGENT, [CASE_STATUS.IN_FIELD, CASE_STATUS.READY_TO_ASSIGN, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.IN_FIELD, [CASE_STATUS.ATTEMPT_REVIEW, CASE_STATUS.CUSTODY_REVIEW, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.ATTEMPT_REVIEW, [CASE_STATUS.IN_FIELD, CASE_STATUS.READY_TO_ASSIGN, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.CUSTODY_REVIEW, [CASE_STATUS.IN_FIELD, CASE_STATUS.PAYMENT_PENDING, CASE_STATUS.CANCELLED]],
-  [CASE_STATUS.PAYMENT_PENDING, [CASE_STATUS.PAYMENT_CONFIRMED]],
-  [CASE_STATUS.PAYMENT_CONFIRMED, [CASE_STATUS.RELEASE_ISSUED]],
-  [CASE_STATUS.RELEASE_ISSUED, [CASE_STATUS.PAYMENT_CONFIRMED, CASE_STATUS.CLOSED]],
-]);
-
-export function canTransition(from, to) {
-  return transitions.get(from)?.includes(to) ?? false;
 }

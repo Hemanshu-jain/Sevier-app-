@@ -1,383 +1,237 @@
-BEGIN;
+-- Handoff MySQL baseline (fresh — replaces the old fictional PostgreSQL 001).
+-- Faithful port of the live SQLite model with canonical snake_case statuses,
+-- foreign keys, and immutable-history triggers. InnoDB + utf8mb4.
+-- ponytail: timestamps are ISO-8601 strings in VARCHAR (matches current app data);
+--   money stays as the app's current mix (cases in rupees, snapshots in paise).
+--   Both are deliberate follow-up changes with their own tests, not this port.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE TABLE organizations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  legal_name TEXT,
-  support_mobile TEXT,
-  active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (id, name)
-);
+CREATE TABLE tenants (
+  id VARCHAR(191) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  mobile TEXT NOT NULL UNIQUE CHECK (mobile ~ '^91[6-9][0-9]{9}$'),
-  name TEXT NOT NULL,
-  email TEXT,
-  active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE platform_admins (
-  user_id UUID PRIMARY KEY REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE roles (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  name TEXT NOT NULL,
-  is_template BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, name),
-  UNIQUE (organization_id, id)
-);
-
-CREATE TABLE role_permissions (
-  role_id UUID NOT NULL REFERENCES roles(id),
-  permission TEXT NOT NULL,
-  PRIMARY KEY (role_id, permission)
-);
-
-CREATE TABLE organization_memberships (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  user_id UUID NOT NULL REFERENCES users(id),
-  role_id UUID NOT NULL,
-  member_type TEXT NOT NULL CHECK (member_type IN ('finance', 'agent')),
-  active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, user_id),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, role_id) REFERENCES roles(organization_id, id)
-);
-
-CREATE TABLE agent_devices (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id),
-  device_fingerprint_hash TEXT NOT NULL,
-  registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  revoked_at TIMESTAMPTZ
-);
-
-CREATE UNIQUE INDEX one_active_device_per_agent
-  ON agent_devices(user_id) WHERE revoked_at IS NULL;
-
-CREATE TABLE otp_challenges (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  mobile TEXT NOT NULL CHECK (mobile ~ '^91[6-9][0-9]{9}$'),
-  purpose TEXT NOT NULL CHECK (purpose IN ('sign_in', 'sign_up', 'device_change')),
-  provider_request_id TEXT,
-  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at TIMESTAMPTZ NOT NULL,
-  verified_at TIMESTAMPTZ,
-  request_ip INET
-);
-
-CREATE INDEX otp_challenges_rate_limit
-  ON otp_challenges(mobile, requested_at DESC);
-
-CREATE TABLE auth_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id),
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  revoked_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE import_batches (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  uploaded_by_membership_id UUID NOT NULL,
-  source_file_name TEXT NOT NULL,
-  source_file_sha256 TEXT NOT NULL,
-  snapshot_month DATE NOT NULL CHECK (snapshot_month = date_trunc('month', snapshot_month)::date),
-  total_rows INTEGER NOT NULL DEFAULT 0 CHECK (total_rows >= 0),
-  accepted_rows INTEGER NOT NULL DEFAULT 0 CHECK (accepted_rows >= 0),
-  rejected_rows INTEGER NOT NULL DEFAULT 0 CHECK (rejected_rows >= 0),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, source_file_sha256),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, uploaded_by_membership_id)
-    REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE TABLE loan_accounts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  account_number TEXT NOT NULL,
-  borrower_name TEXT NOT NULL,
-  borrower_mobile TEXT NOT NULL,
-  borrower_address TEXT NOT NULL,
-  registration_number TEXT NOT NULL,
-  vehicle_make_model TEXT NOT NULL,
-  vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('2_wheeler', '4_wheeler', 'other')),
-  chassis_number TEXT,
-  branch TEXT,
-  active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, account_number),
-  UNIQUE (organization_id, id)
-);
-
-CREATE TABLE monthly_account_snapshots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  loan_account_id UUID NOT NULL,
-  import_batch_id UUID NOT NULL,
-  snapshot_month DATE NOT NULL CHECK (snapshot_month = date_trunc('month', snapshot_month)::date),
-  pending_amount_paise BIGINT NOT NULL CHECK (pending_amount_paise >= 0),
-  overdue_days INTEGER NOT NULL CHECK (overdue_days >= 0),
-  source_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, loan_account_id, import_batch_id),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, loan_account_id)
-    REFERENCES loan_accounts(organization_id, id),
-  FOREIGN KEY (organization_id, import_batch_id)
-    REFERENCES import_batches(organization_id, id)
-);
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  role VARCHAR(32) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  mobile VARCHAR(32),
+  city VARCHAR(191),
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  mobile_e164 VARCHAR(20) UNIQUE,
+  CONSTRAINT users_role_check CHECK (role IN ('super_admin','finance_manager','finance_staff','agent')),
+  CONSTRAINT users_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE recovery_cases (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  loan_account_id UUID NOT NULL,
-  current_snapshot_id UUID NOT NULL,
-  case_number TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'draft',
-  authority_document_key TEXT,
-  authority_document_sha256 TEXT,
-  authority_approved_by_membership_id UUID,
-  authority_approved_at TIMESTAMPTZ,
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  account_number VARCHAR(191) NOT NULL,
+  borrower_name VARCHAR(255) NOT NULL,
+  borrower_mobile VARCHAR(32) NOT NULL,
+  borrower_address TEXT NOT NULL,
+  registration VARCHAR(64) NOT NULL,
+  make_model VARCHAR(255) NOT NULL,
+  chassis VARCHAR(191) NOT NULL,
+  vehicle_type VARCHAR(16) NOT NULL,
+  branch VARCHAR(191) NOT NULL,
+  pending_amount BIGINT NOT NULL,
+  overdue_days INT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  assigned_agent_user_id VARCHAR(191),
+  assigned_at VARCHAR(32),
+  updated_at VARCHAR(32) NOT NULL,
+  custody_id VARCHAR(191),
+  failure_reason VARCHAR(64),
   failure_note TEXT,
-  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  closed_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT case_status_allowed CHECK (status IN (
-    'draft', 'awaiting_authority', 'ready_to_assign', 'awaiting_agent',
-    'in_field', 'attempt_review', 'custody_review', 'payment_pending',
-    'payment_confirmed', 'release_issued', 'closed', 'cancelled'
-  )),
-  CONSTRAINT authority_approval_complete CHECK (
-    (authority_approved_at IS NULL AND authority_approved_by_membership_id IS NULL)
-    OR (authority_approved_at IS NOT NULL AND authority_approved_by_membership_id IS NOT NULL
-        AND authority_document_key IS NOT NULL AND authority_document_sha256 IS NOT NULL)
-  ),
-  UNIQUE (organization_id, case_number),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, loan_account_id)
-    REFERENCES loan_accounts(organization_id, id),
-  FOREIGN KEY (organization_id, current_snapshot_id)
-    REFERENCES monthly_account_snapshots(organization_id, id),
-  FOREIGN KEY (organization_id, authority_approved_by_membership_id)
-    REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE UNIQUE INDEX one_open_case_per_account
-  ON recovery_cases(organization_id, loan_account_id)
-  WHERE status NOT IN ('closed', 'cancelled');
-
-CREATE TABLE case_assignments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  agent_membership_id UUID NOT NULL,
-  assigned_by_membership_id UUID NOT NULL,
-  status TEXT NOT NULL DEFAULT 'offered' CHECK (status IN ('offered', 'accepted', 'declined', 'revoked')),
-  instruction_note TEXT,
-  decline_reason TEXT,
-  assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  responded_at TIMESTAMPTZ,
-  revoked_at TIMESTAMPTZ,
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, agent_membership_id) REFERENCES organization_memberships(organization_id, id),
-  FOREIGN KEY (organization_id, assigned_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE UNIQUE INDEX one_active_assignment_per_case
-  ON case_assignments(organization_id, case_id)
-  WHERE status IN ('offered', 'accepted');
-
-CREATE TABLE field_attempts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  assignment_id UUID NOT NULL,
-  outcome TEXT NOT NULL CHECK (outcome IN ('vehicle_not_found', 'details_mismatch', 'unsafe', 'customer_dispute', 'authority_issue', 'other')),
-  note TEXT NOT NULL,
-  latitude NUMERIC(9, 6),
-  longitude NUMERIC(9, 6),
-  occurred_at TIMESTAMPTZ NOT NULL,
-  submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, assignment_id) REFERENCES case_assignments(organization_id, id)
-);
-
-CREATE TABLE evidence_objects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  captured_by_membership_id UUID NOT NULL,
-  object_key TEXT NOT NULL UNIQUE,
-  original_name TEXT NOT NULL,
-  mime_type TEXT NOT NULL CHECK (mime_type LIKE 'image/%' OR mime_type LIKE 'video/%' OR mime_type = 'application/pdf'),
-  byte_size BIGINT NOT NULL CHECK (byte_size > 0),
-  sha256 TEXT NOT NULL,
-  latitude NUMERIC(9, 6),
-  longitude NUMERIC(9, 6),
-  captured_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, captured_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
+  failure_recorded_at VARCHAR(32),
+  payment_cleared TINYINT(1) NOT NULL DEFAULT 0,
+  release_pass_id VARCHAR(191),
+  payment_reference VARCHAR(255),
+  payment_confirmed_at VARCHAR(32),
+  payment_confirmed_by_user_id VARCHAR(191),
+  authority_document_file_name VARCHAR(255),
+  authority_document_original_name VARCHAR(255),
+  authority_document_mime_type VARCHAR(128),
+  authority_document_byte_size BIGINT,
+  authority_document_sha256 VARCHAR(64),
+  authority_approved_at VARCHAR(32),
+  authority_approved_by_user_id VARCHAR(191),
+  assignment_note TEXT,
+  current_snapshot_id VARCHAR(191),
+  CONSTRAINT cases_vehicle_type_check CHECK (vehicle_type IN ('2-wheeler','4-wheeler')),
+  CONSTRAINT cases_status_check CHECK (status IN ('imported','assigned','unable_to_recover','custody_review','payment_pending','payment_confirmed','release_pass_printed','closed','cancelled')),
+  CONSTRAINT cases_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT cases_agent_fk FOREIGN KEY (assigned_agent_user_id) REFERENCES users(id),
+  INDEX cases_tenant_status (tenant_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE custody_records (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  submitted_by_membership_id UUID NOT NULL,
-  yard_name TEXT NOT NULL,
-  arrival_time TIMESTAMPTZ NOT NULL,
-  parking_rate_paise_per_day BIGINT NOT NULL CHECK (parking_rate_paise_per_day >= 0),
-  inspection JSONB NOT NULL,
-  submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, case_id),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, submitted_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE TABLE custody_reviews (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  custody_record_id UUID NOT NULL,
-  reviewed_by_membership_id UUID NOT NULL,
-  decision TEXT NOT NULL CHECK (decision IN ('approved', 'changes_requested')),
-  note TEXT,
-  reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, custody_record_id) REFERENCES custody_records(organization_id, id),
-  FOREIGN KEY (organization_id, reviewed_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE TABLE payment_confirmations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  confirmed_by_membership_id UUID NOT NULL,
-  reference TEXT NOT NULL,
-  amount_paise BIGINT CHECK (amount_paise IS NULL OR amount_paise >= 0),
-  confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, case_id),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, confirmed_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
-
-CREATE TABLE release_passes (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID NOT NULL,
-  issued_by_membership_id UUID NOT NULL,
-  verification_code TEXT NOT NULL,
-  borrower_name TEXT NOT NULL,
-  borrower_mobile TEXT NOT NULL,
-  registration_number TEXT NOT NULL,
-  vehicle_make_model TEXT NOT NULL,
-  payment_reference TEXT NOT NULL,
-  issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  revoked_at TIMESTAMPTZ,
-  revoked_by_membership_id UUID,
-  revocation_reason TEXT,
-  released_at TIMESTAMPTZ,
-  released_by_membership_id UUID,
-  UNIQUE (organization_id, case_id),
-  UNIQUE (organization_id, verification_code),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, issued_by_membership_id) REFERENCES organization_memberships(organization_id, id),
-  FOREIGN KEY (organization_id, revoked_by_membership_id) REFERENCES organization_memberships(organization_id, id),
-  FOREIGN KEY (organization_id, released_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191) NOT NULL UNIQUE,
+  yard_name VARCHAR(255) NOT NULL,
+  arrival_time VARCHAR(32) NOT NULL,
+  parking_rate BIGINT NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  agent_name VARCHAR(255) NOT NULL,
+  checklist_count INT NOT NULL,
+  inspection_json JSON,
+  finance_reviewed_at VARCHAR(32),
+  finance_reviewed_by_user_id VARCHAR(191),
+  finance_review_note TEXT,
+  custom_note TEXT,
+  CONSTRAINT custody_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT custody_case_fk FOREIGN KEY (case_id) REFERENCES recovery_cases(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE notifications (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  recipient_user_id UUID REFERENCES users(id),
-  title TEXT NOT NULL,
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  recipient_user_id VARCHAR(191),
+  case_id VARCHAR(191),
+  title VARCHAR(255) NOT NULL,
   detail TEXT NOT NULL,
-  tone TEXT NOT NULL CHECK (tone IN ('blue', 'amber', 'green', 'red')),
-  read_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+  created_at VARCHAR(32) NOT NULL,
+  `read` TINYINT(1) NOT NULL DEFAULT 0,
+  tone VARCHAR(16) NOT NULL,
+  CONSTRAINT notifications_tone_check CHECK (tone IN ('blue','amber','green','red')),
+  CONSTRAINT notifications_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT notifications_recipient_fk FOREIGN KEY (recipient_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE audit_events (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  organization_id UUID REFERENCES organizations(id),
-  case_id UUID,
-  actor_user_id UUID REFERENCES users(id),
-  action TEXT NOT NULL,
-  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
-  request_ip INET,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id)
-);
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191),
+  actor_user_id VARCHAR(191) NOT NULL,
+  action VARCHAR(128) NOT NULL,
+  detail TEXT NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  CONSTRAINT audit_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT audit_actor_fk FOREIGN KEY (actor_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE INDEX audit_events_org_time
-  ON audit_events(organization_id, created_at DESC);
+CREATE TABLE evidence (
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191) NOT NULL,
+  agent_user_id VARCHAR(191) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  mime_type VARCHAR(128) NOT NULL,
+  byte_size BIGINT NOT NULL,
+  latitude DOUBLE,
+  longitude DOUBLE,
+  captured_at VARCHAR(32) NOT NULL,
+  CONSTRAINT evidence_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT evidence_case_fk FOREIGN KEY (case_id) REFERENCES recovery_cases(id),
+  CONSTRAINT evidence_agent_fk FOREIGN KEY (agent_user_id) REFERENCES users(id),
+  INDEX evidence_case_index (tenant_id, case_id, captured_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE retention_policies (
-  organization_id UUID PRIMARY KEY REFERENCES organizations(id),
-  retention_days INTEGER NOT NULL DEFAULT 1095 CHECK (retention_days >= 365),
-  updated_by_membership_id UUID,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  FOREIGN KEY (organization_id, updated_by_membership_id)
-    REFERENCES organization_memberships(organization_id, id)
-);
+CREATE TABLE release_passes (
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191) NOT NULL UNIQUE,
+  issued_by_user_id VARCHAR(191),
+  verification_code VARCHAR(64) NOT NULL,
+  issued_at VARCHAR(32) NOT NULL,
+  borrower_name VARCHAR(255) NOT NULL,
+  borrower_mobile VARCHAR(32) NOT NULL,
+  vehicle_registration VARCHAR(64) NOT NULL,
+  vehicle_model VARCHAR(255) NOT NULL,
+  custody_id VARCHAR(191),
+  payment_reference VARCHAR(255),
+  CONSTRAINT release_tenant_fk FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  CONSTRAINT release_case_fk FOREIGN KEY (case_id) REFERENCES recovery_cases(id),
+  CONSTRAINT release_issuer_fk FOREIGN KEY (issued_by_user_id) REFERENCES users(id),
+  INDEX release_tenant_index (tenant_id, issued_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE legal_holds (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  case_id UUID,
-  reason TEXT NOT NULL,
-  placed_by_membership_id UUID NOT NULL,
-  placed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  released_by_membership_id UUID,
-  released_at TIMESTAMPTZ,
-  FOREIGN KEY (organization_id, case_id) REFERENCES recovery_cases(organization_id, id),
-  FOREIGN KEY (organization_id, placed_by_membership_id) REFERENCES organization_memberships(organization_id, id),
-  FOREIGN KEY (organization_id, released_by_membership_id) REFERENCES organization_memberships(organization_id, id)
-);
+CREATE TABLE otp_challenges (
+  id VARCHAR(191) PRIMARY KEY,
+  mobile_e164 VARCHAR(20) NOT NULL,
+  purpose VARCHAR(16) NOT NULL DEFAULT 'sign_in',
+  provider_request_id VARCHAR(191),
+  requested_at VARCHAR(32) NOT NULL,
+  expires_at VARCHAR(32) NOT NULL,
+  verified_at VARCHAR(32),
+  request_ip VARCHAR(64),
+  CONSTRAINT otp_purpose_check CHECK (purpose IN ('sign_in','sign_up')),
+  INDEX otp_mobile_time (mobile_e164, requested_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE OR REPLACE FUNCTION prevent_immutable_change()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  RAISE EXCEPTION '% is immutable', TG_TABLE_NAME;
-END;
-$$;
+CREATE TABLE auth_sessions (
+  id VARCHAR(191) PRIMARY KEY,
+  user_id VARCHAR(191) NOT NULL,
+  token_hash VARCHAR(191) NOT NULL UNIQUE,
+  created_at VARCHAR(32) NOT NULL,
+  expires_at VARCHAR(32) NOT NULL,
+  revoked_at VARCHAR(32),
+  CONSTRAINT sessions_user_fk FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TRIGGER monthly_account_snapshots_immutable
-  BEFORE UPDATE OR DELETE ON monthly_account_snapshots
-  FOR EACH ROW EXECUTE FUNCTION prevent_immutable_change();
+CREATE TABLE notification_reads (
+  notification_id VARCHAR(191) NOT NULL,
+  user_id VARCHAR(191) NOT NULL,
+  read_at VARCHAR(32) NOT NULL,
+  PRIMARY KEY (notification_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TRIGGER field_attempts_immutable
-  BEFORE UPDATE OR DELETE ON field_attempts
-  FOR EACH ROW EXECUTE FUNCTION prevent_immutable_change();
+CREATE TABLE field_mutation_receipts (
+  tenant_id VARCHAR(191) NOT NULL,
+  agent_user_id VARCHAR(191) NOT NULL,
+  client_mutation_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191) NOT NULL,
+  operation VARCHAR(16) NOT NULL,
+  status_code INT NOT NULL,
+  response_json JSON NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  PRIMARY KEY (tenant_id, agent_user_id, client_mutation_id),
+  CONSTRAINT receipts_operation_check CHECK (operation IN ('evidence','attempt','custody'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TRIGGER payment_confirmations_immutable
-  BEFORE UPDATE OR DELETE ON payment_confirmations
-  FOR EACH ROW EXECUTE FUNCTION prevent_immutable_change();
+CREATE TABLE import_batches (
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  actor_user_id VARCHAR(191) NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_sha256 VARCHAR(64) NOT NULL,
+  snapshot_month VARCHAR(10) NOT NULL,
+  total_rows INT NOT NULL,
+  accepted_rows INT NOT NULL,
+  rejected_rows INT NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  UNIQUE KEY import_file_unique (tenant_id, file_sha256),
+  CONSTRAINT import_actor_fk FOREIGN KEY (actor_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TRIGGER audit_events_immutable
-  BEFORE UPDATE OR DELETE ON audit_events
-  FOR EACH ROW EXECUTE FUNCTION prevent_immutable_change();
+CREATE TABLE monthly_account_snapshots (
+  id VARCHAR(191) PRIMARY KEY,
+  tenant_id VARCHAR(191) NOT NULL,
+  case_id VARCHAR(191) NOT NULL,
+  import_batch_id VARCHAR(191) NOT NULL,
+  snapshot_month VARCHAR(10) NOT NULL,
+  pending_amount_paise BIGINT NOT NULL,
+  overdue_days INT NOT NULL,
+  source_json JSON NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  CONSTRAINT snapshot_amount_check CHECK (pending_amount_paise >= 0),
+  CONSTRAINT snapshot_overdue_check CHECK (overdue_days >= 0),
+  CONSTRAINT snapshot_case_fk FOREIGN KEY (case_id) REFERENCES recovery_cases(id),
+  CONSTRAINT snapshot_batch_fk FOREIGN KEY (import_batch_id) REFERENCES import_batches(id),
+  INDEX snapshot_case_month (tenant_id, case_id, snapshot_month)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-COMMIT;
+-- Immutable history: block UPDATE/DELETE on audit, release, receipts, snapshots.
+CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events are immutable';
+CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit_events are immutable';
+CREATE TRIGGER release_passes_no_update BEFORE UPDATE ON release_passes FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'release_passes are immutable';
+CREATE TRIGGER release_passes_no_delete BEFORE DELETE ON release_passes FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'release_passes are immutable';
+CREATE TRIGGER field_mutation_receipts_no_update BEFORE UPDATE ON field_mutation_receipts FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'field mutation receipts are immutable';
+CREATE TRIGGER field_mutation_receipts_no_delete BEFORE DELETE ON field_mutation_receipts FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'field mutation receipts are immutable';
+CREATE TRIGGER monthly_snapshots_no_update BEFORE UPDATE ON monthly_account_snapshots FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'monthly snapshots are immutable';
+CREATE TRIGGER monthly_snapshots_no_delete BEFORE DELETE ON monthly_account_snapshots FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'monthly snapshots are immutable';

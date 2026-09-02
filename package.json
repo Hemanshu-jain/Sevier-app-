@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --env-file-if-exists=.env --test test/*.test.mjs",
     "dev": "concurrently -n api,web -c green,blue \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite",
     "dev:api": "node server/index.mjs",
@@ -26,6 +26,7 @@
     "express": "latest",
     "lucide-react": "latest",
     "multer": "latest",
+    "mysql2": "3.24.3",
     "react": "latest",
     "react-dom": "latest",
     "read-excel-file": "9.3.10",
