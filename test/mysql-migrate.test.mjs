@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPool, migrate } from '../server/mysql.mjs';
+import { createPool, migrate, query, queryOne, tx } from '../server/mysql.mjs';
 
 // ponytail: skip unless a dev MySQL is configured, so the suite stays green without one.
 const skip = process.env.DATABASE_URL ? false : 'set DATABASE_URL to run MySQL tests';
@@ -23,6 +23,27 @@ test('migrate builds the schema, is idempotent, and declares immutability trigge
     await pool.query("INSERT INTO tenants (id, name) VALUES ('t-mysqltest', 'Test Co') ON DUPLICATE KEY UPDATE name = VALUES(name)");
     const [[row]] = await pool.query("SELECT name FROM tenants WHERE id = 't-mysqltest'");
     assert.equal(row.name, 'Test Co');
+  } finally {
+    await pool.end();
+  }
+});
+
+test('tx commits on success and rolls back on throw', { skip }, async () => {
+  const pool = createPool();
+  try {
+    await migrate(pool);
+    await query(pool, "DELETE FROM tenants WHERE id IN ('t-commit', 't-rollback')");
+
+    await tx(pool, (conn) => query(conn, "INSERT INTO tenants (id, name) VALUES ('t-commit', 'Committed')"));
+    assert.equal((await queryOne(pool, "SELECT name FROM tenants WHERE id = 't-commit'")).name, 'Committed');
+
+    await assert.rejects(tx(pool, async (conn) => {
+      await query(conn, "INSERT INTO tenants (id, name) VALUES ('t-rollback', 'Gone')");
+      throw new Error('boom');
+    }), /boom/);
+    assert.equal(await queryOne(pool, "SELECT name FROM tenants WHERE id = 't-rollback'"), null);
+
+    await query(pool, "DELETE FROM tenants WHERE id IN ('t-commit', 't-rollback')");
   } finally {
     await pool.end();
   }

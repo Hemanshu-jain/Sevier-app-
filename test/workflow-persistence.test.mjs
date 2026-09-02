@@ -1,104 +1,93 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
-import { ensureWorkflowIntegrity, persistCustody, persistReleasePass } from '../server/workflow-persistence.mjs';
+import { persistCustody, persistReleasePass } from '../server/workflow-persistence.mjs';
+import { query } from '../server/mysql.mjs';
+import { migratedPool, makeTenant, makeUser, makeCase, uid, skipWithoutDb } from './mysql-helpers.mjs';
 
-function workflowDatabase() {
-  const database = new DatabaseSync(':memory:');
-  database.exec(`
-    CREATE TABLE recovery_cases (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      custody_id TEXT,
-      release_pass_id TEXT,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE custody_records (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      case_id TEXT NOT NULL UNIQUE,
-      yard_name TEXT NOT NULL,
-      arrival_time TEXT NOT NULL,
-      parking_rate INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      agent_name TEXT NOT NULL,
-      checklist_count INTEGER NOT NULL,
-      inspection_json TEXT,
-      custom_note TEXT
-    );
-    CREATE TABLE release_passes (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      case_id TEXT NOT NULL UNIQUE,
-      issued_by_user_id TEXT,
-      verification_code TEXT NOT NULL,
-      issued_at TEXT NOT NULL,
-      borrower_name TEXT NOT NULL,
-      borrower_mobile TEXT NOT NULL,
-      vehicle_registration TEXT NOT NULL,
-      vehicle_model TEXT NOT NULL,
-      custody_id TEXT,
-      payment_reference TEXT
-    );
-    INSERT INTO recovery_cases VALUES ('RC-1', 'tenant-1', 'Assigned', NULL, NULL, 'before');
-  `);
-  return database;
-}
+const skip = skipWithoutDb;
 
-test('custody record rolls back when its case cannot advance', () => {
-  const database = workflowDatabase();
-  database.exec("CREATE TRIGGER reject_case_update BEFORE UPDATE ON recovery_cases BEGIN SELECT RAISE(ABORT, 'stop'); END;");
+test('custody persistence rolls back when the case cannot be updated', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const tenantA = await makeTenant(pool);
+    const tenantB = await makeTenant(pool);
+    const caseId = await makeCase(pool, { tenantId: tenantA, status: 'assigned' });
+    const custodyId = uid('CT');
+    // Wrong tenant: custody insert satisfies FKs, but the case UPDATE matches 0 rows → throw → rollback.
+    await assert.rejects(persistCustody(pool, {
+      id: custodyId, tenantId: tenantB, caseId, yardName: 'Yard', arrivalTime: '2026-08-29T10:00:00Z',
+      parkingRate: 350, createdAt: '2026-08-29T10:05:00Z', agentName: 'Agent', checklist: 14, inspection: { Battery: 'Present / working' },
+    }), /could not be updated/i);
 
-  assert.throws(() => persistCustody(database, {
-    id: 'CT-1', tenantId: 'tenant-1', caseId: 'RC-1', yardName: 'Central Yard', arrivalTime: '2026-08-29T10:00:00Z',
-    parkingRate: 350, createdAt: '2026-08-29T10:05:00Z', agentName: 'Agent One', checklist: 14, inspection: { Battery: 'Present / working' },
-  }), /stop/);
-
-  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM custody_records').get().count, 0);
-  const recoveryCase = database.prepare('SELECT status, custody_id FROM recovery_cases WHERE id = ?').get('RC-1');
-  assert.equal(recoveryCase.status, 'Assigned');
-  assert.equal(recoveryCase.custody_id, null);
-  database.close();
+    assert.equal((await query(pool, 'SELECT COUNT(*) AS c FROM custody_records WHERE id = ?', [custodyId]))[0].c, 0);
+    const row = (await query(pool, 'SELECT status, custody_id FROM recovery_cases WHERE id = ?', [caseId]))[0];
+    assert.equal(row.status, 'assigned');
+    assert.equal(row.custody_id, null);
+  } finally {
+    await pool.end();
+  }
 });
 
-test('case release state rolls back when its immutable pass cannot be recorded', () => {
-  const database = workflowDatabase();
-  database.prepare('INSERT INTO release_passes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('RP-1', 'tenant-1', 'OTHER', null, 'OLD', 'before', 'Other', '9000000000', 'KA 01 AA 0001', 'Vehicle', null, 'OLD-REF');
-
-  assert.throws(() => persistReleasePass(database, {
-    id: 'RP-1', tenantId: 'tenant-1', caseId: 'RC-1', issuedByUserId: 'user-1', verificationCode: 'NEWCODE', issuedAt: '2026-08-29T11:00:00Z',
-    borrowerName: 'Borrower', borrowerMobile: '9876543210', vehicleRegistration: 'KA 01 AB 1234', vehicleModel: 'Vehicle', custodyId: 'CT-1', paymentReference: 'PAY-1',
-  }), /UNIQUE/);
-
-  const recoveryCase = database.prepare('SELECT status, release_pass_id FROM recovery_cases WHERE id = ?').get('RC-1');
-  assert.equal(recoveryCase.status, 'Assigned');
-  assert.equal(recoveryCase.release_pass_id, null);
-  database.close();
+test('custody persistence advances the case and keeps the agent custom note', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const tenantA = await makeTenant(pool);
+    const caseId = await makeCase(pool, { tenantId: tenantA, status: 'assigned' });
+    const custodyId = uid('CT');
+    await persistCustody(pool, {
+      id: custodyId, tenantId: tenantA, caseId, yardName: 'Yard', arrivalTime: '2026-08-29T10:00:00Z',
+      parkingRate: 350, createdAt: '2026-08-29T10:05:00Z', agentName: 'Agent', checklist: 14,
+      inspection: { Battery: 'Present / working' }, customNote: 'Left mirror scratched.',
+    });
+    assert.equal((await query(pool, 'SELECT custom_note FROM custody_records WHERE id = ?', [custodyId]))[0].custom_note, 'Left mirror scratched.');
+    assert.equal((await query(pool, 'SELECT status FROM recovery_cases WHERE id = ?', [caseId]))[0].status, 'custody_review');
+  } finally {
+    await pool.end();
+  }
 });
 
-test('custody persistence keeps the agent custom note', () => {
-  const database = workflowDatabase();
-  persistCustody(database, {
-    id: 'CT-1', tenantId: 'tenant-1', caseId: 'RC-1', yardName: 'Central Yard', arrivalTime: '2026-08-29T10:00:00Z',
-    parkingRate: 350, createdAt: '2026-08-29T10:05:00Z', agentName: 'Agent One', checklist: 14,
-    inspection: { Battery: 'Present / working' }, customNote: 'Left mirror scratched.',
-  });
+test('release pass persistence rolls back the case when the pass cannot be recorded', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const tenantA = await makeTenant(pool);
+    const case1 = await makeCase(pool, { tenantId: tenantA, status: 'assigned' });
+    const case2 = await makeCase(pool, { tenantId: tenantA, status: 'assigned' });
+    const passId = uid('RP');
+    await query(pool,
+      `INSERT INTO release_passes (id, tenant_id, case_id, verification_code, issued_at, borrower_name, borrower_mobile, vehicle_registration, vehicle_model)
+       VALUES (?, ?, ?, 'OLD', '2026-01-01', 'B', '919', 'KA', 'M')`, [passId, tenantA, case2]);
 
-  assert.equal(database.prepare('SELECT custom_note FROM custody_records').get().custom_note, 'Left mirror scratched.');
-  database.close();
+    // Same pass id for a different case: case UPDATE succeeds, pass INSERT hits the PK → rollback.
+    await assert.rejects(persistReleasePass(pool, {
+      id: passId, tenantId: tenantA, caseId: case1, issuedByUserId: null, verificationCode: 'NEW', issuedAt: '2026-08-29T11:00:00Z',
+      borrowerName: 'B', borrowerMobile: '9876543210', vehicleRegistration: 'KA 01 AB 1234', vehicleModel: 'V', custodyId: null, paymentReference: 'PAY',
+    }), /duplicate/i);
+
+    const row = (await query(pool, 'SELECT status, release_pass_id FROM recovery_cases WHERE id = ?', [case1]))[0];
+    assert.equal(row.status, 'assigned');
+    assert.equal(row.release_pass_id, null);
+  } finally {
+    await pool.end();
+  }
 });
 
-test('release passes and audit events reject later edits and deletion', () => {
-  const database = workflowDatabase();
-  database.exec('CREATE TABLE audit_events (id INTEGER PRIMARY KEY, detail TEXT NOT NULL)');
-  ensureWorkflowIntegrity(database);
-  database.prepare('INSERT INTO release_passes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('RP-1', 'tenant-1', 'RC-1', null, 'CODE', 'now', 'Borrower', '9000000000', 'KA 01 AB 1234', 'Vehicle', null, 'PAY-1');
-  database.prepare('INSERT INTO audit_events VALUES (?, ?)').run(1, 'Recorded');
+test('release passes and audit events reject later edits and deletion', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const tenantA = await makeTenant(pool);
+    const actor = await makeUser(pool, { tenantId: tenantA, role: 'super_admin' });
+    const caseId = await makeCase(pool, { tenantId: tenantA });
+    const passId = uid('RP');
+    await query(pool,
+      `INSERT INTO release_passes (id, tenant_id, case_id, verification_code, issued_at, borrower_name, borrower_mobile, vehicle_registration, vehicle_model)
+       VALUES (?, ?, ?, 'CODE', 'now', 'B', '919', 'KA', 'M')`, [passId, tenantA, caseId]);
+    await query(pool, "INSERT INTO audit_events (tenant_id, actor_user_id, action, detail, created_at) VALUES (?, ?, 'act', 'detail', 'now')", [tenantA, actor]);
 
-  assert.throws(() => database.exec("UPDATE release_passes SET verification_code = 'CHANGED'"), /immutable/);
-  assert.throws(() => database.exec('DELETE FROM release_passes'), /immutable/);
-  assert.throws(() => database.exec("UPDATE audit_events SET detail = 'Changed'"), /immutable/);
-  assert.throws(() => database.exec('DELETE FROM audit_events'), /immutable/);
-  database.close();
+    await assert.rejects(query(pool, "UPDATE release_passes SET verification_code = 'X' WHERE id = ?", [passId]), /immutable/i);
+    await assert.rejects(query(pool, 'DELETE FROM release_passes WHERE id = ?', [passId]), /immutable/i);
+    await assert.rejects(query(pool, "UPDATE audit_events SET detail = 'X' WHERE tenant_id = ?", [tenantA]), /immutable/i);
+    await assert.rejects(query(pool, 'DELETE FROM audit_events WHERE tenant_id = ?', [tenantA]), /immutable/i);
+  } finally {
+    await pool.end();
+  }
 });

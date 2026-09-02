@@ -8,7 +8,37 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations'
 export function createPool(url = process.env.DATABASE_URL) {
   if (!url) throw new Error('DATABASE_URL is required for MySQL.');
   // multipleStatements lets a whole migration file run in one call.
-  return mysql.createPool({ uri: url, multipleStatements: true });
+  // decimalNumbers returns DECIMAL columns as JS numbers instead of strings.
+  return mysql.createPool({ uri: url, multipleStatements: true, decimalNumbers: true });
+}
+
+// Data access. `executor` is the pool or a tx connection — both expose .query,
+// so ported helpers take it the way the old SQLite helpers took `database`.
+// query() returns rows for SELECT, or the ResultSetHeader (.affectedRows/.insertId) for writes.
+export async function query(executor, sql, params = []) {
+  const [result] = await executor.query(sql, params);
+  return result;
+}
+
+export async function queryOne(executor, sql, params = []) {
+  const [rows] = await executor.query(sql, params);
+  return rows[0] ?? null;
+}
+
+// Runs fn inside one transaction on a dedicated connection; rolls back on throw.
+export async function tx(pool, fn) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const result = await fn(conn);
+    await conn.commit();
+    return result;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 // Applies ordered server/migrations/*.sql not yet recorded. Returns the ids it ran.

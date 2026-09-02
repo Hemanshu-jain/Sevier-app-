@@ -37,7 +37,7 @@ CREATE TABLE recovery_cases (
   chassis VARCHAR(191) NOT NULL,
   vehicle_type VARCHAR(16) NOT NULL,
   branch VARCHAR(191) NOT NULL,
-  pending_amount BIGINT NOT NULL,
+  pending_amount DECIMAL(14,2) NOT NULL, -- ponytail: rupees for now; real fix is paise BIGINT (deferred, own step)
   overdue_days INT NOT NULL,
   status VARCHAR(32) NOT NULL,
   assigned_agent_user_id VARCHAR(191),
