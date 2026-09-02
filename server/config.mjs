@@ -1,5 +1,5 @@
 const developmentDefaults = {
-  DATABASE_URL: 'postgresql://handoff:handoff@127.0.0.1:5432/handoff',
+  DATABASE_URL: 'mysql://handoff:handoff_dev@localhost:3306/handoff_dev',
   OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:9000',
   OBJECT_STORAGE_BUCKET: 'handoff-development',
   PUBLIC_WEB_URL: 'http://127.0.0.1:8787',

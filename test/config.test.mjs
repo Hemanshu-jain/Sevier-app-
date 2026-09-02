@@ -18,7 +18,7 @@ test('development configuration provides local service defaults', () => {
     nodeEnv: 'development',
     port: 9000,
     listenHost: '127.0.0.1',
-    databaseUrl: 'postgresql://handoff:handoff@127.0.0.1:5432/handoff',
+    databaseUrl: 'mysql://handoff:handoff_dev@localhost:3306/handoff_dev',
     objectStorageEndpoint: 'http://127.0.0.1:9000',
     objectStorageBucket: 'handoff-development',
     msg91AuthKey: '',
