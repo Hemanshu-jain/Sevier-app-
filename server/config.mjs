@@ -21,6 +21,7 @@ export function loadConfig(env = process.env) {
   return {
     nodeEnv,
     port,
+    listenHost: env.HANDOFF_API_HOST || '127.0.0.1',
     databaseUrl: value('DATABASE_URL'),
     objectStorageEndpoint: value('OBJECT_STORAGE_ENDPOINT'),
     objectStorageBucket: value('OBJECT_STORAGE_BUCKET'),

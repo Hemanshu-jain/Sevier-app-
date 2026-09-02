@@ -29,10 +29,15 @@ test('mobile package is installable and uses the production web bundle', async (
   assert.equal(packageJson.scripts['mobile:sync'], 'npm run build && cap sync android');
 
   const gradle = readFileSync('android/app/build.gradle', 'utf8');
+  const rootGradle = readFileSync('android/build.gradle', 'utf8');
   const variables = readFileSync('android/variables.gradle', 'utf8');
   const androidManifest = readFileSync('android/app/src/main/AndroidManifest.xml', 'utf8');
+  const debugManifest = readFileSync('android/app/src/debug/AndroidManifest.xml', 'utf8');
   assert.match(gradle, /applicationId "in\.handoff\.recovery"/);
+  assert.match(rootGradle, /HANDOFF_ANDROID_BUILD_DIR/);
   assert.match(variables, /minSdkVersion = 24/);
   assert.match(androidManifest, /android\.permission\.INTERNET/);
   assert.match(androidManifest, /android\.permission\.ACCESS_FINE_LOCATION/);
+  assert.doesNotMatch(androidManifest, /usesCleartextTraffic/);
+  assert.match(debugManifest, /android:usesCleartextTraffic="true"/);
 });

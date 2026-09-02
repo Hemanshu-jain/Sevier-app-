@@ -557,4 +557,4 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'Unexpected server error.' });
 });
 
-app.listen(port, '127.0.0.1', () => console.log(`Seizer API listening on http://127.0.0.1:${port}`));
+app.listen(port, config.listenHost, () => console.log(`Seizer API listening on http://${config.listenHost}:${port}`));

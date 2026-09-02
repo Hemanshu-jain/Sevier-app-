@@ -17,6 +17,7 @@ test('development configuration provides local service defaults', () => {
   assert.deepEqual(loadConfig({ NODE_ENV: 'development', PORT: '9000' }), {
     nodeEnv: 'development',
     port: 9000,
+    listenHost: '127.0.0.1',
     databaseUrl: 'postgresql://handoff:handoff@127.0.0.1:5432/handoff',
     objectStorageEndpoint: 'http://127.0.0.1:9000',
     objectStorageBucket: 'handoff-development',
@@ -25,6 +26,10 @@ test('development configuration provides local service defaults', () => {
     publicWebUrl: 'http://127.0.0.1:8787',
     developmentOtpCode: '123456',
   });
+});
+
+test('development API can opt into LAN listening for a debug APK', () => {
+  assert.equal(loadConfig({ HANDOFF_API_HOST: '0.0.0.0' }).listenHost, '0.0.0.0');
 });
 
 test('development OTP code must remain numeric', () => {

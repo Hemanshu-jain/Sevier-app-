@@ -17,10 +17,15 @@ buildscript {
 
 apply from: "variables.gradle"
 
+def handoffAndroidBuildDir = System.getenv('HANDOFF_ANDROID_BUILD_DIR')
+
 allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+    if (handoffAndroidBuildDir) {
+        layout.buildDirectory.set(new File(handoffAndroidBuildDir, project.name))
     }
 }
 
