@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateAttempt, validateCustody, validateFieldCase } from '../server/field-validation.mjs';
 
-const activeCase = { status: 'Assigned' };
+const activeCase = { status: 'assigned' };
 
 test('field actions are limited to active assignments', () => {
   assert.equal(validateFieldCase(activeCase), null);
-  assert.match(validateFieldCase({ status: 'Closed' }), /active assignment/i);
-  assert.match(validateAttempt({ status: 'Payment confirmed' }, { reason: 'Other', note: 'Test' }), /active assignment/i);
+  assert.match(validateFieldCase({ status: 'closed' }), /active assignment/i);
+  assert.match(validateAttempt({ status: 'payment_confirmed' }, { reason: 'Other', note: 'Test' }), /active assignment/i);
 });
 
 test('attempts require an allowed reason and bounded factual note', () => {

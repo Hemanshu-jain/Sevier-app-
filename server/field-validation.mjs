@@ -1,4 +1,4 @@
-const activeStatuses = new Set(['Assigned', 'Accepted', 'Attempt in progress']);
+const activeStatuses = new Set(['assigned']);
 const reasons = new Set(['Vehicle not found', 'Vehicle details mismatch', 'Unsafe situation', 'Customer dispute', 'Authority issue', 'Other']);
 const checklist = ['Battery', 'Spare tyre', 'Fuel level', 'Matting', 'Keys and key number', 'Meter / odometer', 'Existing damages', 'Self motor', 'Wiper / motor', 'Stereo / infotainment', 'Ignition coil', 'Speakers', 'Side mirrors', 'Tyre condition'];
 const conditions = new Set(['Present / working', 'Missing', 'Damaged', 'Not applicable']);
