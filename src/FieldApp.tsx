@@ -231,13 +231,21 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
 
   async function captureLocation() {
     if (!navigator.geolocation) { setNotice('This device cannot provide a location. Use a GPS-enabled Android phone.'); return; }
+    // Phone browsers only expose geolocation on a secure origin (HTTPS or localhost). On a plain
+    // http:// LAN address the request fails with no useful reason, so name the real cause here.
+    if (!window.isSecureContext) { setNotice('Location needs a secure (HTTPS) connection. Open this app using its https:// address, then capture again.'); return; }
     setWorking(true);
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 }));
       updateDraft({ location: { latitude: position.coords.latitude, longitude: position.coords.longitude, capturedAt: new Date().toISOString() } });
       setNotice('Live location captured for this work order.');
-    } catch {
-      setNotice('Location was not captured. Enable precise location permission and try again.');
+    } catch (error) {
+      const code = (error as GeolocationPositionError | undefined)?.code;
+      setNotice(
+        code === 1 ? 'Location permission was denied. Allow precise location for this site in your browser settings, then try again.'
+        : code === 3 ? 'Getting a location fix took too long. Move into open sky and capture again.'
+        : 'Location was not captured. Turn on precise location and try again.',
+      );
     } finally { setWorking(false); }
   }
 
