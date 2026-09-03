@@ -42,6 +42,7 @@ export interface RecoveryCase {
   overdueDays: number;
   status: CaseStatus;
   assignedAgentId?: string;
+  assignedAgents?: { id: string; name: string }[];
   assignedAt?: string;
   assignmentNote?: string;
   updatedAt: string;

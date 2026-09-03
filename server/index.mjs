@@ -82,8 +82,9 @@ function apiUser(row) {
   return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete) };
 }
 
-function mapCase(row) {
+function mapCase(row, assignedAgents = []) {
   return {
+    assignedAgents,
     id: row.id,
     accountNumber: row.account_number,
     borrower: { name: row.borrower_name, mobile: row.borrower_mobile, address: row.borrower_address },
@@ -149,9 +150,14 @@ function requirePermission(permission) {
 }
 
 async function caseForUser(id, user) {
-  const row = await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?', [id, user.tenantId]);
-  if (!row || (user.role === 'agent' && row.assigned_agent_user_id !== user.id)) return null;
-  return row;
+  const row = await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [id]);
+  if (!row) return null;
+  if (user.role === 'agent') {
+    // An agent reaches a case through an active co-assignment, in whichever tenant owns it.
+    const assigned = await queryOne(pool, 'SELECT 1 AS x FROM case_assignments WHERE case_id = ? AND agent_user_id = ? AND active = 1', [id, user.id]);
+    return assigned ? row : null;
+  }
+  return row.tenant_id === user.tenantId ? row : null;
 }
 
 async function requireAssignedCase(req, res, next) {
@@ -172,7 +178,7 @@ function requireFieldMutation(operation) {
     const validationError = validateIdempotencyKey(key);
     if (validationError) return res.status(422).json({ error: validationError });
     try {
-      const identity = { tenantId: req.user.tenantId, userId: req.user.id, key, caseId: req.recoveryCase.id, operation };
+      const identity = { tenantId: req.recoveryCase.tenant_id, userId: req.user.id, key, caseId: req.recoveryCase.id, operation };
       const receipt = await readFieldMutation(pool, identity);
       if (receipt) return res.status(receipt.statusCode).json(receipt.body);
       req.fieldMutation = identity;
@@ -267,28 +273,31 @@ app.post('/api/auth/logout', auth, async (req, res) => {
 app.get('/api/workspace', auth, async (req, res) => {
   const isAgent = req.user.role === 'agent';
   const caseRows = isAgent
-    ? await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? AND assigned_agent_user_id = ? ORDER BY updated_at DESC', [req.user.tenantId, req.user.id])
+    ? await query(pool, 'SELECT rc.* FROM recovery_cases rc JOIN case_assignments ca ON ca.case_id = rc.id AND ca.agent_user_id = ? AND ca.active = 1 ORDER BY rc.updated_at DESC', [req.user.id])
     : await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? ORDER BY updated_at DESC', [req.user.tenantId]);
   const visibleCaseIds = caseRows.map((row) => row.id);
   const custodyRows = isAgent
-    ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? AND case_id IN (?) ORDER BY created_at DESC', [req.user.tenantId, visibleCaseIds]) : [])
+    ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE case_id IN (?) ORDER BY created_at DESC', [visibleCaseIds]) : [])
     : await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC', [req.user.tenantId]);
   const agentRows = isAgent ? [] : await query(pool, "SELECT users.id, users.name, users.mobile, users.city, m.active FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? ORDER BY users.name", [req.user.tenantId]);
-  // ponytail: month start in ISO; compares against updated_at (close time) as the "completed" proxy — a dedicated closed_at is the exact fix if it ever matters.
+  // Active count per agent from live co-assignments; completed uses the primary/legacy pointer as a rough monthly proxy.
+  const assignmentCounts = isAgent ? [] : await query(pool, "SELECT ca.agent_user_id AS id, COUNT(*) AS n FROM case_assignments ca JOIN recovery_cases rc ON rc.id = ca.case_id WHERE ca.tenant_id = ? AND ca.active = 1 AND rc.status <> 'closed' GROUP BY ca.agent_user_id", [req.user.tenantId]);
+  const activeByAgent = new Map(assignmentCounts.map((row) => [row.id, row.n]));
   const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
   const monthStartIso = monthStart.toISOString();
   const agentData = agentRows.map((agent) => {
-    const theirs = caseRows.filter((item) => item.assigned_agent_user_id === agent.id);
-    const active = theirs.filter((item) => item.status !== 'closed').length;
-    const completed = theirs.filter((item) => item.status === 'closed' && item.updated_at >= monthStartIso).length;
-    return mapAgent(agent, active, completed);
+    const completed = caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status === 'closed' && item.updated_at >= monthStartIso).length;
+    return mapAgent(agent, activeByAgent.get(agent.id) ?? 0, completed);
   });
   const notificationRows = await listNotifications(pool, req.user);
   const releasePassRows = isAgent ? [] : await query(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC', [req.user.tenantId]);
   const eventRows = isAgent ? [] : await query(pool, 'SELECT release_pass_id, event FROM release_pass_events WHERE tenant_id = ?', [req.user.tenantId]);
   const lifecycleByPass = new Map();
   for (const row of eventRows) if (row.event === 'revoked' || !lifecycleByPass.get(row.release_pass_id)) lifecycleByPass.set(row.release_pass_id, row.event); // revoked wins
-  res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
+  const assignmentRows = isAgent ? [] : await query(pool, 'SELECT ca.case_id, ca.agent_user_id, users.name FROM case_assignments ca JOIN users ON users.id = ca.agent_user_id WHERE ca.tenant_id = ? AND ca.active = 1', [req.user.tenantId]);
+  const agentsByCase = new Map();
+  for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name }); agentsByCase.set(row.case_id, list); }
+  res.json({ cases: caseRows.map((row) => mapCase(row, agentsByCase.get(row.id) || [])), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -462,19 +471,29 @@ app.post('/api/cases/:id/authority-revocation', auth, requirePermission(PERMISSI
 
 app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
   const caseRow = await caseForUser(req.params.id, req.user);
-  const agentId = String(req.body?.agentId || '');
-  const assignmentNote = String(req.body?.assignmentNote || '').trim();
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const assignmentNote = String(req.body?.assignmentNote || '').trim();
   const actionError = validateCaseAction('assign', caseRow, { assignmentNote });
   if (actionError) return res.status(422).json({ error: actionError });
-  const agent = await queryOne(pool, "SELECT * FROM users WHERE id = ? AND tenant_id = ? AND role = 'agent' AND active = 1", [agentId, req.user.tenantId]);
-  if (!agent) return res.status(422).json({ error: 'Choose an active agent from this finance company.' });
+  const agentIds = Array.isArray(req.body?.agentIds) ? req.body.agentIds.map(String).filter(Boolean) : (req.body?.agentId ? [String(req.body.agentId)] : []);
+  if (!agentIds.length) return res.status(422).json({ error: 'Choose at least one agent.' });
+  const rosterAgents = await query(pool, "SELECT users.id, users.name FROM users JOIN agent_memberships m ON m.agent_user_id = users.id AND m.tenant_id = ? AND m.active = 1 WHERE users.id IN (?) AND users.role = 'agent' AND users.active = 1", [req.user.tenantId, agentIds]);
+  if (rosterAgents.length !== new Set(agentIds).size) return res.status(422).json({ error: 'Choose active agents from your roster.' });
+  const nameById = new Map(rosterAgents.map((agent) => [agent.id, agent.name]));
   const updatedAt = isoNow();
   await tx(pool, async (conn) => {
+    const currentActive = (await query(conn, 'SELECT agent_user_id FROM case_assignments WHERE case_id = ? AND tenant_id = ? AND active = 1', [caseRow.id, req.user.tenantId])).map((row) => row.agent_user_id);
+    const desired = new Set(agentIds);
+    for (const id of currentActive.filter((current) => !desired.has(current))) {
+      await query(conn, 'UPDATE case_assignments SET active = 0, unassigned_at = ? WHERE case_id = ? AND tenant_id = ? AND agent_user_id = ? AND active = 1', [updatedAt, caseRow.id, req.user.tenantId, id]);
+    }
+    for (const id of agentIds.filter((wanted) => !currentActive.includes(wanted))) {
+      await query(conn, 'INSERT INTO case_assignments (tenant_id, case_id, agent_user_id, assigned_at, assigned_by_user_id, note, active) VALUES (?, ?, ?, ?, ?, ?, 1)', [req.user.tenantId, caseRow.id, id, updatedAt, req.user.id, assignmentNote || null]);
+      await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: id, caseId: caseRow.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
+    }
     await query(conn, "UPDATE recovery_cases SET status = 'assigned', assigned_agent_user_id = ?, assigned_at = ?, assignment_note = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL WHERE id = ? AND tenant_id = ?",
-      [agent.id, updatedAt, assignmentNote || null, updatedAt, caseRow.id, req.user.tenantId]);
-    await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: agent.id, caseId: caseRow.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
-    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agent.name}.${assignmentNote ? ` Instruction: ${assignmentNote}` : ''}` });
+      [agentIds[0], updatedAt, assignmentNote || null, updatedAt, caseRow.id, req.user.tenantId]);
+    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agentIds.map((id) => nameById.get(id)).join(', ')}.${assignmentNote ? ` Instruction: ${assignmentNote}` : ''}` });
   });
   res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
 });
@@ -491,9 +510,9 @@ app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_S
   const locationDetail = Number.isFinite(latitude) && Number.isFinite(longitude) ? ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.` : '';
   const body = await tx(pool, async (conn) => {
     await query(conn, "UPDATE recovery_cases SET status = 'unable_to_recover', failure_reason = ?, failure_note = ?, failure_recorded_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?",
-      [reason, note, updatedAt, updatedAt, caseRow.id, req.user.tenantId]);
-    await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
-    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'attempt.failed', detail: `${reason}: ${note}${locationDetail}` });
+      [reason, note, updatedAt, updatedAt, caseRow.id, caseRow.tenant_id]);
+    await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
+    await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'attempt.failed', detail: `${reason}: ${note}${locationDetail}` });
     const response = { case: mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) };
     await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 200, body: response, createdAt: updatedAt });
     return response;
@@ -521,10 +540,10 @@ app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_
       for (const file of files) {
         const id = `ev-${crypto.randomUUID()}`;
         await query(conn, 'INSERT INTO evidence (id, tenant_id, case_id, agent_user_id, file_name, original_name, mime_type, byte_size, latitude, longitude, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, req.user.tenantId, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, Number.isFinite(latitude) ? latitude : null, Number.isFinite(longitude) ? longitude : null, capturedAt]);
+          [id, req.recoveryCase.tenant_id, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, Number.isFinite(latitude) ? latitude : null, Number.isFinite(longitude) ? longitude : null, capturedAt]);
         records.push(mapEvidence(await queryOne(conn, 'SELECT * FROM evidence WHERE id = ?', [id])));
       }
-      await addAudit(conn, { tenantId: req.user.tenantId, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'evidence.uploaded', detail: `${records.length} field evidence file(s) captured.` });
+      await addAudit(conn, { tenantId: req.recoveryCase.tenant_id, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'evidence.uploaded', detail: `${records.length} field evidence file(s) captured.` });
       const response = { evidence: records };
       await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 201, body: response, createdAt: isoNow() });
       return response;
@@ -539,12 +558,12 @@ app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_
 app.get('/api/cases/:id/evidence', auth, async (req, res) => {
   const caseRow = await caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
-  const records = await query(pool, 'SELECT evidence.*, users.name AS agent_name FROM evidence JOIN users ON users.id = evidence.agent_user_id WHERE evidence.tenant_id = ? AND evidence.case_id = ? ORDER BY evidence.captured_at DESC', [req.user.tenantId, caseRow.id]);
+  const records = await query(pool, 'SELECT evidence.*, users.name AS agent_name FROM evidence JOIN users ON users.id = evidence.agent_user_id WHERE evidence.tenant_id = ? AND evidence.case_id = ? ORDER BY evidence.captured_at DESC', [caseRow.tenant_id, caseRow.id]);
   res.json({ evidence: records.map(mapEvidence) });
 });
 
 app.get('/api/evidence/:id/file', auth, async (req, res) => {
-  const evidence = await queryOne(pool, 'SELECT * FROM evidence WHERE id = ? AND tenant_id = ?', [req.params.id, req.user.tenantId]);
+  const evidence = await queryOne(pool, 'SELECT * FROM evidence WHERE id = ?', [req.params.id]);
   if (!evidence || !(await caseForUser(evidence.case_id, req.user))) return res.status(404).json({ error: 'Evidence file not found.' });
   res.type(evidence.mime_type).sendFile(join(uploadDirectory, evidence.file_name));
 });
@@ -557,7 +576,7 @@ app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_S
   const checklist = Number(req.body?.checklist || 0);
   const inspection = req.body?.inspection && typeof req.body.inspection === 'object' ? req.body.inspection : null;
   const customNote = String(req.body?.customNote || '').trim();
-  const evidenceCount = (await queryOne(pool, 'SELECT COUNT(*) AS count FROM evidence WHERE tenant_id = ? AND case_id = ?', [req.user.tenantId, caseRow.id])).count;
+  const evidenceCount = (await queryOne(pool, 'SELECT COUNT(*) AS count FROM evidence WHERE tenant_id = ? AND case_id = ?', [caseRow.tenant_id, caseRow.id])).count;
   const validationError = validateCustody(caseRow, { yardName, arrivalTime, parkingRate, checklist, inspection, evidenceCount, customNote });
   if (validationError) return res.status(422).json({ error: validationError });
   const id = `CT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
@@ -567,9 +586,9 @@ app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_S
   const locationDetail = Number.isFinite(latitude) && Number.isFinite(longitude) ? ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.` : '';
   try {
     const body = await tx(pool, async (conn) => {
-      await persistCustody(conn, { id, tenantId: req.user.tenantId, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote });
-      await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
-      await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
+      await persistCustody(conn, { id, tenantId: caseRow.tenant_id, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote });
+      await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
+      await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
       const response = { case: mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), custody: mapCustody(await queryOne(conn, 'SELECT * FROM custody_records WHERE id = ?', [id])) };
       await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 201, body: response, createdAt });
       return response;

@@ -152,7 +152,7 @@ export const api = {
     body.append('document', document);
     return request<{ case: RecoveryCase }>(`/api/cases/${caseId}/authority-approval`, { method: 'POST', body }, token);
   },
-  assignCase: (token: string, caseId: string, agentId: string, assignmentNote: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentId, assignmentNote }) }, token),
+  assignCase: (token: string, caseId: string, agentIds: string[], assignmentNote: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentIds, assignmentNote }) }, token),
   recordAttempt: (token: string, caseId: string, reason: string, note: string, mutationId: string, location?: { latitude: number; longitude: number }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/attempt`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body: JSON.stringify({ reason, note, ...location }) }, token),
   recordCustody: (token: string, caseId: string, values: { yardName: string; arrivalTime: string; parkingRate: number; checklist: number; inspection: Record<string, string>; customNote?: string; latitude?: number; longitude?: number }, mutationId: string) => request<{ case: RecoveryCase; custody: CustodyRecord }>(`/api/cases/${caseId}/custody`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body: JSON.stringify(values) }, token),
   approveCustody: (token: string, caseId: string, note: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/custody-review`, { method: 'POST', body: JSON.stringify({ note }) }, token),
