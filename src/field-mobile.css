@@ -47,3 +47,10 @@
 /* ---- polish pass: tap feedback (appended) ---- */
 .field-primary,.field-secondary,.field-assignment,.field-list-row,.field-tabs button,.field-file-picker,.field-location{transition:transform .1s ease,background-color .15s ease,box-shadow .15s ease,border-color .15s ease}
 .field-primary:active,.field-secondary:active,.field-assignment:active,.field-file-picker:active,.field-location:active{transform:scale(.985)}
+.field-avatar{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:#e5eefb;color:#245ab0;flex:none}
+.field-settings-form{display:grid;gap:12px;margin-top:14px}
+.field-settings-form input:disabled{background:#eef2f7;color:#8496a8}
+.field-idproof-label{display:inline-flex;align-items:center;gap:6px}
+.field-form-error{margin:0;color:#c0413d;font-size:11px;font-weight:700}
+.field-signout{margin-top:16px;color:#c0413d;border-color:#f0cecb}
+.field-signout:hover{background:#fff4f3}

@@ -35,7 +35,8 @@ function Root() {
   if (session.user.role === 'agent' && session.user.onboardingComplete === false) {
     return <OnboardingWizard session={session} onDone={(user) => apply({ ...session, user })} onLogout={logout} />;
   }
-  return session.user.role === 'agent' ? <FieldApp session={session} onLogout={logout} /> : <App session={session} onLogout={logout} />;
+  const onSessionUpdate = (user: Session['user']) => apply({ ...session, user });
+  return session.user.role === 'agent' ? <FieldApp session={session} onLogout={logout} onSessionUpdate={onSessionUpdate} /> : <App session={session} onLogout={logout} onSessionUpdate={onSessionUpdate} />;
 }
 
 function LoginPage({ onSession }: { onSession: (session: Session) => void }) {

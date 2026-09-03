@@ -257,7 +257,8 @@ app.put('/api/profile', auth, async (req, res) => {
   if (name.length < 2 || name.length > 100) return res.status(422).json({ error: 'Enter your full name.' });
   if (city.length < 2 || city.length > 100) return res.status(422).json({ error: 'Enter your city.' });
   const idProof = String(req.body?.idProof || '').trim();
-  if (req.user.role === 'agent' && idProof.length < 4) return res.status(422).json({ error: 'Add a valid ID proof reference.' });
+  // ID proof is required to finish onboarding; a later settings edit may omit it (the existing value is kept).
+  if (req.user.role === 'agent' && req.user.onboardingComplete === false && idProof.length < 4) return res.status(422).json({ error: 'Add a valid ID proof reference.' });
   await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END WHERE id = ?", [name, city, idProof, req.user.id]);
   const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [req.user.id]);
   return res.json({ user: apiUser(user) });

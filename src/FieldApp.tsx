@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import {
   ArrowLeft, Bell, Camera, CarFront, Check, ChevronRight, CircleAlert, ClipboardCheck, Cloud,
-  Crosshair, FileCheck2, ListChecks, LogOut, MapPinned, Phone, RefreshCw, Save, ShieldAlert,
-  Upload, Wifi, WifiOff, X,
+  Crosshair, FileCheck2, IdCard, ListChecks, LogOut, MapPinned, Phone, RefreshCw, Save, Settings, ShieldAlert,
+  Upload, UserRound, Wifi, WifiOff, X,
 } from 'lucide-react';
 import { api } from './api';
 import type { Session, Workspace } from './api';
@@ -21,7 +22,7 @@ const agentChecklist = ['Battery', 'Spare tyre', 'Fuel level', 'Matting', 'Keys 
 const inspectionOptions = ['', 'Present / working', 'Missing', 'Damaged', 'Not applicable'];
 const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], groups: [], notifications: [], releasePasses: [] };
 
-type FieldView = 'home' | 'notifications' | 'sync';
+type FieldView = 'home' | 'notifications' | 'sync' | 'settings';
 type FieldStep = 'work' | 'verify' | 'evidence' | 'custody';
 type FieldLocation = { latitude: number; longitude: number; capturedAt: string };
 type FieldDraft = {
@@ -61,7 +62,7 @@ function mutationLabel(operation: StoredFieldMutation['operation']) {
   return operation === 'evidence' ? 'Evidence upload' : operation === 'attempt' ? 'Unable-to-recover update' : 'Custody certificate';
 }
 
-function FieldApp({ session, onLogout: finishLogout }: { session: Session; onLogout: () => void }) {
+function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { session: Session; onLogout: () => void; onSessionUpdate: (user: Session['user']) => void }) {
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [mutations, setMutations] = useState<StoredFieldMutation[]>([]);
   const [view, setView] = useState<FieldView>('home');
@@ -354,15 +355,52 @@ function FieldApp({ session, onLogout: finishLogout }: { session: Session; onLog
     </main>;
   }
 
+  if (view === 'settings') return <main className="field-app"><FieldHeader title="SETTINGS" onBack={() => setView('home')} onLogout={onLogout} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><FieldSettings session={session} online={online} pending={mutations.length} onSaved={onSessionUpdate} onNotice={setNotice} onLogout={onLogout} /></section></main>;
+
   if (view === 'notifications') return <main className="field-app"><FieldHeader title="NOTIFICATIONS" onBack={() => setView('home')} onLogout={onLogout} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><div className="field-screen-title"><div><p className="field-greeting">Finance updates</p><h1>Notifications</h1></div><button className="field-text-action" disabled={!unreadCount} onClick={markNotificationsRead}>Mark all read</button></div><section className="field-list">{workspace.notifications.length ? workspace.notifications.map((item) => <button key={item.id} className={`field-list-row ${item.read ? '' : 'unread'}`} onClick={() => { if (item.caseId && assignments.some((entry) => entry.id === item.caseId)) setSelectedId(item.caseId); }}><Bell size={18} /><span><strong>{item.title}</strong><small>{item.detail}</small><em>{new Date(item.createdAt).toLocaleString()}</em></span>{item.caseId && <ChevronRight size={17} />}</button>) : <p className="field-empty">No notifications for this agent.</p>}</section></section></main>;
 
   if (view === 'sync') return <main className="field-app"><FieldHeader title="PENDING SYNC" onBack={() => setView('home')} onLogout={onLogout} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><div className="field-screen-title"><div><p className="field-greeting">Device queue</p><h1>Pending sync</h1></div><button className="field-icon-action" aria-label="Retry synchronization" disabled={!online || syncing || !mutations.length} onClick={retryQueue}><RefreshCw className={syncing ? 'spin' : ''} size={18} /></button></div><p className="field-copy">Operations remain here until the finance server confirms them. There is no destructive discard action.</p><section className="field-list">{mutations.length ? mutations.map((item) => <article key={item.id} className="field-list-row"><ListChecks size={18} /><span><strong>{mutationLabel(item.operation)}</strong><small>{item.caseId} · {item.status === 'needs_attention' ? 'Needs attention' : item.status === 'syncing' ? 'Sending now' : online ? 'Waiting to send' : 'Waiting for connection'}</small><em>{new Date(item.createdAt).toLocaleString()} · {item.attemptCount ?? 0} attempt(s)</em>{item.error && <b role="alert">{item.error}</b>}</span></article>) : <p className="field-empty">Everything from this device has synchronized.</p>}</section></section></main>;
 
-  return <main className="field-app"><header className="field-header home"><div className="field-brand"><span className="field-mark"><i /><i /><i /></span>handoff</div><nav className="field-home-actions" aria-label="Agent tools"><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={19} />{unreadCount > 0 && <i>{unreadCount}</i>}</button><button onClick={() => setView('sync')} aria-label={`${mutations.length} pending sync operations`}><Cloud size={19} />{mutations.length > 0 && <i>{mutations.length}</i>}</button><button onClick={onLogout} aria-label="Sign out"><LogOut size={19} /></button></nav></header><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><p className="field-greeting">Good day, {session.user.name.split(' ')[0]}</p><h1>Your assignments</h1><p className="field-copy">Only work orders assigned to you are shown here.</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? syncing ? 'Online · synchronizing' : 'Online' : 'Offline · work will stay on this device'}</div>{loading ? <p className="field-copy">Loading secure assignments…</p> : <><div className="field-summary three"><span><strong>{filterAgentCases(assignments, 'active').length}</strong>active</span><span><strong>{filterAgentCases(assignments, 'submitted').length}</strong>submitted</span><span className={needsAttention ? 'attention' : ''}><strong>{needsAttention}</strong>needs attention</span></div><div className="field-tabs" role="tablist" aria-label="Assignment status"><button role="tab" aria-selected={filter === 'active'} className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active</button><button role="tab" aria-selected={filter === 'submitted'} className={filter === 'submitted' ? 'active' : ''} onClick={() => setFilter('submitted')}>Submitted</button></div><section className="assignment-cards">{visibleAssignments.length ? visibleAssignments.map((item) => <AssignmentCard key={item.id} item={item} submitted={filter === 'submitted'} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />) : <p className="field-empty">No {filter} work orders.</p>}</section></>}<div className="field-footer-note"><ShieldAlert size={16} /> Every update is time-stamped, tenant-scoped, and sent only to the finance company.</div></section></main>;
+  return <main className="field-app"><header className="field-header home"><div className="field-brand"><span className="field-mark"><i /><i /><i /></span>handoff</div><nav className="field-home-actions" aria-label="Agent tools"><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={19} />{unreadCount > 0 && <i>{unreadCount}</i>}</button><button onClick={() => setView('sync')} aria-label={`${mutations.length} pending sync operations`}><Cloud size={19} />{mutations.length > 0 && <i>{mutations.length}</i>}</button><button onClick={() => setView('settings')} aria-label="Settings and profile"><Settings size={19} /></button></nav></header><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><p className="field-greeting">Good day, {session.user.name.split(' ')[0]}</p><h1>Your assignments</h1><p className="field-copy">Only work orders assigned to you are shown here.</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? syncing ? 'Online · synchronizing' : 'Online' : 'Offline · work will stay on this device'}</div>{loading ? <p className="field-copy">Loading secure assignments…</p> : <><div className="field-summary three"><span><strong>{filterAgentCases(assignments, 'active').length}</strong>active</span><span><strong>{filterAgentCases(assignments, 'submitted').length}</strong>submitted</span><span className={needsAttention ? 'attention' : ''}><strong>{needsAttention}</strong>needs attention</span></div><div className="field-tabs" role="tablist" aria-label="Assignment status"><button role="tab" aria-selected={filter === 'active'} className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active</button><button role="tab" aria-selected={filter === 'submitted'} className={filter === 'submitted' ? 'active' : ''} onClick={() => setFilter('submitted')}>Submitted</button></div><section className="assignment-cards">{visibleAssignments.length ? visibleAssignments.map((item) => <AssignmentCard key={item.id} item={item} submitted={filter === 'submitted'} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />) : <p className="field-empty">No {filter} work orders.</p>}</section></>}<div className="field-footer-note"><ShieldAlert size={16} /> Every update is time-stamped, tenant-scoped, and sent only to the finance company.</div></section></main>;
 }
 
 function FieldHeader({ title, onBack, onLogout }: { title: string; onBack: () => void; onLogout: () => void }) {
   return <header className="field-header"><button onClick={onBack} aria-label="Go back"><ArrowLeft size={20} /></button><div><span>FIELD AGENT</span><strong>{title}</strong></div><button onClick={onLogout} aria-label="Sign out"><LogOut size={19} /></button></header>;
+}
+
+function FieldSettings({ session, online, pending, onSaved, onNotice, onLogout }: { session: Session; online: boolean; pending: number; onSaved: (user: Session['user']) => void; onNotice: (message: string) => void; onLogout: () => void }) {
+  const [name, setName] = useState(session.user.name);
+  const [city, setCity] = useState(session.user.city ?? '');
+  const [idProof, setIdProof] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '') || idProof.trim().length > 0;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true); setError('');
+    try {
+      const { user } = await api.updateProfile(session.token, { name: name.trim(), city: city.trim(), idProof: idProof.trim() || undefined });
+      setIdProof('');
+      onSaved(user);
+      onNotice('Your profile was saved.');
+    } catch (err) { setError(errorMessage(err, 'Your profile could not be saved.')); }
+    finally { setSaving(false); }
+  }
+
+  return <>
+    <div className="field-screen-title"><div><p className="field-greeting">Signed in as</p><h1>{session.user.name}</h1></div><span className="field-avatar"><UserRound size={22} /></span></div>
+    <form className="field-settings-form" onSubmit={submit}>
+      <label className="field-text-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} maxLength={100} /></label>
+      <label className="field-text-label">City<input value={city} onChange={(event) => setCity(event.target.value)} required minLength={2} maxLength={100} /></label>
+      <label className="field-text-label">Mobile<input value={session.user.mobile ?? ''} readOnly disabled /></label>
+      <label className="field-text-label"><span className="field-idproof-label"><IdCard size={15} /> Update ID proof reference</span><input value={idProof} onChange={(event) => setIdProof(event.target.value)} placeholder="Leave blank to keep your current ID proof" minLength={4} maxLength={100} /></label>
+      {error && <p className="field-form-error" role="alert">{error}</p>}
+      <button className="field-primary" type="submit" disabled={!dirty || saving}><Check size={18} /> {saving ? 'Saving…' : 'Save profile'}</button>
+    </form>
+    <section className="field-info-card"><p className="field-label">Connection and sync</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? 'Online' : 'Offline · work stays on this device'}</div><p className="field-copy">{pending > 0 ? `${pending} update${pending === 1 ? '' : 's'} waiting to sync from this device.` : 'Everything from this device has synced.'}</p></section>
+    <button className="field-secondary field-signout" type="button" onClick={onLogout}><LogOut size={17} /> Sign out</button>
+  </>;
 }
 
 function FieldMessages({ notice, online, onDismiss }: { notice: string | null; online: boolean; onDismiss: () => void }) {

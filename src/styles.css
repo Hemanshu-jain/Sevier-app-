@@ -112,3 +112,9 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .custody-review-actions .drawer-actions{display:flex;gap:8px}
 .custody-open-case{justify-self:start}
 @media(max-width:900px){.custody-workspace{grid-template-columns:1fr}.custody-list{max-height:none}}
+.settings-block{padding:18px 20px;margin-bottom:16px}
+.settings-block .detail-grid{margin-top:4px}
+.profile-form{margin-top:14px;display:grid;gap:12px}
+.profile-form .modal-actions{justify-content:flex-start;margin-top:2px}
+.profile-form input:disabled{background:#f4f6f9;color:#7a8aa0;cursor:not-allowed}
+.text-button.danger{color:var(--red);display:inline-flex;align-items:center;gap:5px}

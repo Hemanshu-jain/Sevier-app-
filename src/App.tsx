@@ -83,7 +83,7 @@ function openRowFromKeyboard(event: ReactKeyboardEvent<HTMLTableRowElement>, onO
   onOpen();
 }
 
-function App({ session, onLogout }: { session: Session; onLogout: () => void }) {
+function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogout: () => void; onSessionUpdate: (user: Session['user']) => void }) {
   const [page, setPage] = useState<Page>('dashboard');
   const [cases, setCases] = useState<RecoveryCase[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
@@ -319,6 +319,13 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to request changes.'); }
   }
 
+  async function saveProfile(values: { name: string; city: string }) {
+    setActionError(''); setActionNotice('');
+    const { user } = await api.updateProfile(session.token, values);
+    onSessionUpdate(user);
+    setActionNotice('Your profile was updated.');
+  }
+
   async function revokeAuthority() {
     if (!selectedCase) return;
     try {
@@ -386,7 +393,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
-    settings: <SettingsPage members={financeMembers} loading={membersLoading} session={session} onAdd={() => setDialog('member')} onChangeStatus={changeMemberStatus} />,
+    settings: <SettingsPage members={financeMembers} loading={membersLoading} session={session} onAdd={() => setDialog('member')} onChangeStatus={changeMemberStatus} onLogout={onLogout} onSaveProfile={saveProfile} />,
   };
 
   return (
@@ -599,10 +606,30 @@ function NotificationsPage({ items, onReadAll }: { items: AppNotification[]; onR
   return <><div className="page-heading"><div><p className="eyebrow">Finance and field updates</p><h2>Notifications</h2><p className="page-copy">Assignments, field updates, custody records, payment confirmation, and release events.</p></div><button className="secondary-button" onClick={onReadAll}><Check size={15} /> Mark all read</button></div><article className="card notification-list">{items.map((item) => <div className={`notification-row ${item.read ? '' : 'unread'}`} key={item.id}><span className={`notification-icon ${item.tone}`}><Bell size={16} /></span><div><h3>{item.title}</h3><p>{item.detail}</p><small>{item.createdAt}</small></div>{!item.read && <i />}</div>)}</article></>;
 }
 
-function SettingsPage({ members, loading, session, onAdd, onChangeStatus }: { members: FinanceMember[]; loading: boolean; session: Session; onAdd: () => void; onChangeStatus: (member: FinanceMember) => void }) {
+function SettingsPage({ members, loading, session, onAdd, onChangeStatus, onLogout, onSaveProfile }: { members: FinanceMember[]; loading: boolean; session: Session; onAdd: () => void; onChangeStatus: (member: FinanceMember) => void; onLogout: () => void; onSaveProfile: (values: { name: string; city: string }) => Promise<void> }) {
   const canManage = session.user.permissions.includes('member.manage');
   const canChange = (member: FinanceMember) => member.id !== session.user.id && member.role !== 'super_admin' && (session.user.role === 'super_admin' || member.role === 'finance_staff');
-  return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage finance-team access and review the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>{canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace('_', ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}<section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
+  const roleLabel = session.user.role.replace(/_/g, ' ');
+  return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage your profile, finance-team access, and the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>
+    <ProfileCard session={session} onSave={onSaveProfile} onLogout={onLogout} />
+    <article className="card settings-block"><div className="card-heading"><div><h3>Tenant</h3><p>The finance company this workspace belongs to</p></div></div><dl className="detail-grid"><div><dt>Company</dt><dd>{session.user.tenantName ?? '—'}</dd></div><div><dt>Your role</dt><dd style={{ textTransform: 'capitalize' }}>{roleLabel}</dd></div><div><dt>Permissions</dt><dd>{session.user.permissions.length} granted</dd></div></dl></article>
+    {canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace(/_/g, ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}
+    <section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
+}
+
+function ProfileCard({ session, onSave, onLogout }: { session: Session; onSave: (values: { name: string; city: string }) => Promise<void>; onLogout: () => void }) {
+  const [name, setName] = useState(session.user.name);
+  const [city, setCity] = useState(session.user.city ?? '');
+  const [saving, setSaving] = useState(false);
+  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '');
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    try { await onSave({ name: name.trim(), city: city.trim() }); } finally { setSaving(false); }
+  }
+  return <article className="card settings-block"><div className="card-heading"><div><h3>Your profile</h3><p>Your name and city; mobile and role are identity-locked</p></div><button className="text-button danger" type="button" onClick={onLogout}><LogOut size={14} /> Sign out</button></div>
+    <form className="profile-form" onSubmit={submit}><div className="form-two-col"><label className="field-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} maxLength={100} /></label><label className="field-label">City<input value={city} onChange={(event) => setCity(event.target.value)} required minLength={2} maxLength={100} /></label><label className="field-label">Mobile<input value={session.user.mobile ?? ''} readOnly disabled /></label><label className="field-label">Role<input value={session.user.role.replace(/_/g, ' ')} readOnly disabled style={{ textTransform: 'capitalize' }} /></label></div><div className="modal-actions"><button className="primary-button" type="submit" disabled={!dirty || saving}><Check size={15} /> {saving ? 'Saving…' : 'Save profile'}</button></div></form>
+  </article>;
 }
 
 function CaseDrawer({ caseItem, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint, onRevokeAuthority, onRevokeRelease }: { caseItem: RecoveryCase; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void; onRevokeAuthority: () => void; onRevokeRelease: () => void }) {
