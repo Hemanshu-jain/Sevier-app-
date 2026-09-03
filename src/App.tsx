@@ -424,7 +424,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       {dialog === 'payment' && selectedCase && <PaymentDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={clearPayment} />}
       {dialog === 'release' && selectedCase && <ReleaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={issueReleasePass} />}
       {dialog === 'close' && selectedCase && <CloseCaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={closeCase} />}
-      {printPass && <PrintableReleasePass pass={printPass} caseItem={cases.find((item) => item.id === printPass.caseId)} custody={custody.find((item) => item.id === printPass.custodyId)} tenantName={session.user.tenantName} />}
+      {printPass && <PrintableReleasePass pass={printPass} caseItem={cases.find((item) => item.id === printPass.caseId)} custody={custody.find((item) => item.id === printPass.custodyId)} tenantName={session.user.tenantName ?? ''} />}
     </div>
   );
 }

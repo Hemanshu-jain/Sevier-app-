@@ -11,7 +11,7 @@ import { loadConfig } from './config.mjs';
 import { validateCaseAction } from './case-actions.mjs';
 import { isAllowedAuthorityDocument, isAllowedEvidenceFile } from './file-validation.mjs';
 import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from './otp-service.mjs';
-import { requestSignInOtp, verifySignInOtp } from './otp-auth.mjs';
+import { requestSignInOtp, verifySignInOtp, requestSignUpOtp, verifySignUpOtp } from './otp-auth.mjs';
 import { hashSessionToken } from './session-token.mjs';
 import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
@@ -79,7 +79,7 @@ app.use(cors({ origin: true, credentials: false }));
 app.use(express.json({ limit: '2mb' }));
 
 function apiUser(row) {
-  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name };
+  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete) };
 }
 
 function mapCase(row) {
@@ -133,7 +133,7 @@ async function auth(req, res, next) {
     const user = await queryOne(pool, `SELECT users.*, tenants.name AS tenant_name, auth_sessions.id AS session_id
       FROM auth_sessions
       JOIN users ON users.id = auth_sessions.user_id
-      JOIN tenants ON tenants.id = users.tenant_id
+      LEFT JOIN tenants ON tenants.id = users.tenant_id
       WHERE auth_sessions.token_hash = ? AND auth_sessions.revoked_at IS NULL AND auth_sessions.expires_at > ? AND users.active = 1`, [hashSessionToken(token), isoNow()]);
     if (!user) return res.status(401).json({ error: 'This user account is no longer active.' });
     req.user = apiUser(user);
@@ -212,14 +212,48 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       mobile: String(req.body?.mobile || ''),
       code: String(req.body?.code || ''),
     });
-    const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [result.userId]);
-    await addAudit(pool, { tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.login', detail: 'Signed in with a verified mobile OTP.' });
+    const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [result.userId]);
+    if (user.tenant_id) await addAudit(pool, { tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.login', detail: 'Signed in with a verified mobile OTP.' });
     return res.json({ token: result.token, user: apiUser(user) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'OTP verification failed.';
     const status = /unavailable/i.test(message) ? 503 : 401;
     return res.status(status).json({ error: status === 401 ? 'The OTP is invalid, expired, or already used.' : message });
   }
+});
+
+app.post('/api/agent/signup/request-otp', async (req, res) => {
+  try {
+    const result = await requestSignUpOtp({ database: pool, otpProvider, mobile: String(req.body?.mobile || ''), requestIp: req.ip });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Sign-up OTP could not be sent.';
+    const status = /already has an account/i.test(message) ? 409 : /too many/i.test(message) ? 429 : /unavailable|rejected/i.test(message) ? 503 : 422;
+    return res.status(status).json({ error: message });
+  }
+});
+
+app.post('/api/agent/signup/verify', async (req, res) => {
+  try {
+    const result = await verifySignUpOtp({ database: pool, otpProvider, challengeId: String(req.body?.challengeId || ''), mobile: String(req.body?.mobile || ''), code: String(req.body?.code || '') });
+    const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [result.userId]);
+    return res.json({ token: result.token, user: apiUser(user) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Sign-up verification failed.';
+    return res.status(/unavailable/i.test(message) ? 503 : 401).json({ error: message });
+  }
+});
+
+app.put('/api/profile', auth, async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const city = String(req.body?.city || '').trim();
+  if (name.length < 2 || name.length > 100) return res.status(422).json({ error: 'Enter your full name.' });
+  if (city.length < 2 || city.length > 100) return res.status(422).json({ error: 'Enter your city.' });
+  const idProof = String(req.body?.idProof || '').trim();
+  if (req.user.role === 'agent' && idProof.length < 4) return res.status(422).json({ error: 'Add a valid ID proof reference.' });
+  await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END WHERE id = ?", [name, city, idProof, req.user.id]);
+  const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [req.user.id]);
+  return res.json({ user: apiUser(user) });
 });
 
 app.get('/api/me', auth, (req, res) => res.json({ user: req.user }));

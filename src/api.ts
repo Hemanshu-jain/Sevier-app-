@@ -5,14 +5,15 @@ export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'ag
 
 export interface SessionUser {
   id: string;
-  tenantId: string;
-  tenantName: string;
+  tenantId: string | null;
+  tenantName: string | null;
   role: UserRole;
   permissions: string[];
   name: string;
   email: string;
   mobile: string | null;
   city: string | null;
+  onboardingComplete?: boolean;
 }
 
 export interface Session {
@@ -110,6 +111,9 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
 export const api = {
   requestOtp: (mobile: string) => request<OtpChallenge>('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
   verifyOtp: (mobile: string, code: string, challengeId: string) => request<Session>('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
+  signupRequestOtp: (mobile: string) => request<OtpChallenge>('/api/agent/signup/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
+  signupVerify: (mobile: string, code: string, challengeId: string) => request<Session>('/api/agent/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
+  updateProfile: (token: string, values: { name: string; city: string; idProof?: string }) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),
   logout: (token: string) => request<void>('/api/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<{ user: SessionUser }>('/api/me', {}, token),
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),

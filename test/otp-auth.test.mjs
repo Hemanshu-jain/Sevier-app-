@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hashSessionToken } from '../server/session-token.mjs';
-import { requestSignInOtp, verifySignInOtp } from '../server/otp-auth.mjs';
+import { requestSignInOtp, verifySignInOtp, requestSignUpOtp, verifySignUpOtp } from '../server/otp-auth.mjs';
 import { query } from '../server/mysql.mjs';
 import { migratedPool, makeTenant, makeUser, randomMobile, uid, skipWithoutDb } from './mysql-helpers.mjs';
 
@@ -64,6 +64,23 @@ test('verification consumes the challenge and persists only a session-token hash
     assert.equal(saved.token_hash, hashSessionToken(session.token));
     assert.equal(saved.token_hash.includes(session.token), false);
     await assert.rejects(verifySignInOtp({ database: pool, otpProvider: provider, challengeId: challenge.challengeId, mobile, code: '123456', now }), /already been used/i);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('self-signup creates a global agent needing onboarding, and rejects an existing mobile', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const mobile = randomMobile();
+    const req = await requestSignUpOtp({ database: pool, otpProvider: provider, mobile });
+    const session = await verifySignUpOtp({ database: pool, otpProvider: provider, challengeId: req.challengeId, mobile, code: '123456' });
+    const user = (await query(pool, 'SELECT tenant_id, role, onboarding_complete, created_via FROM users WHERE id = ?', [session.userId]))[0];
+    assert.equal(user.tenant_id, null);
+    assert.equal(user.role, 'agent');
+    assert.equal(user.onboarding_complete, 0);
+    assert.equal(user.created_via, 'self');
+    await assert.rejects(requestSignUpOtp({ database: pool, otpProvider: provider, mobile }), /already has an account/i);
   } finally {
     await pool.end();
   }
