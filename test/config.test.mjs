@@ -24,6 +24,9 @@ test('development configuration provides local service defaults', () => {
     msg91AuthKey: '',
     msg91OtpTemplateId: '',
     publicWebUrl: 'http://127.0.0.1:8787',
+    releaseSigningPrivateKey: '',
+    releaseSigningPublicKey: '',
+    releaseSigningKeyId: '',
     developmentOtpCode: '123456',
   });
 });

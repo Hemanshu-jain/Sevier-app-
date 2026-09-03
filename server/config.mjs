@@ -28,6 +28,9 @@ export function loadConfig(env = process.env) {
     msg91AuthKey: value('MSG91_AUTH_KEY'),
     msg91OtpTemplateId: value('MSG91_OTP_TEMPLATE_ID'),
     publicWebUrl: value('PUBLIC_WEB_URL'),
+    releaseSigningPrivateKey: env.RELEASE_SIGNING_PRIVATE_KEY || '',
+    releaseSigningPublicKey: env.RELEASE_SIGNING_PUBLIC_KEY || '',
+    releaseSigningKeyId: env.RELEASE_SIGNING_KEY_ID || '',
     developmentOtpCode,
   };
 }

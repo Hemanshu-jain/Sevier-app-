@@ -24,6 +24,7 @@ import { validateAttempt, validateCustody, validateFieldCase } from './field-val
 import { persistCustody, persistReleasePass } from './workflow-persistence.mjs';
 import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from './field-mutations.mjs';
 import { listNotifications, markNotificationsRead } from './notification-access.mjs';
+import { createReleaseSigner } from './release-signing.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -32,6 +33,9 @@ const pool = createPool(config.databaseUrl);
 const otpProvider = config.nodeEnv === 'production'
   ? createOtpService({ authKey: config.msg91AuthKey, templateId: config.msg91OtpTemplateId })
   : createDevelopmentOtpService(config.developmentOtpCode);
+const releaseSigner = createReleaseSigner({ privateKey: config.releaseSigningPrivateKey, publicKey: config.releaseSigningPublicKey, keyId: config.releaseSigningKeyId });
+const RELEASE_TTL_MS = 90 * 24 * 60 * 60 * 1000; // ponytail: 90-day pass validity; make it configurable if a real retention policy appears
+const maskRegistration = (reg) => String(reg || '').replace(/.(?=.{4})/g, '•');
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const uploadDirectory = join(appDirectory, 'uploads');
 mkdirSync(uploadDirectory, { recursive: true });
@@ -118,8 +122,8 @@ function mapAgent(row, activeCases = 0, completedThisMonth = 0) {
   return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth, status: row.active ? 'Active' : 'Suspended' };
 }
 
-function mapReleasePass(row) {
-  return { id: row.id, caseId: row.case_id, verificationCode: row.verification_code, issuedAt: row.issued_at, borrowerName: row.borrower_name, borrowerMobile: row.borrower_mobile, vehicleRegistration: row.vehicle_registration, vehicleModel: row.vehicle_model, custodyId: row.custody_id ?? undefined, paymentReference: row.payment_reference ?? undefined, issuedByName: row.issued_by_name ?? undefined };
+function mapReleasePass(row, lifecycle = 'valid') {
+  return { id: row.id, caseId: row.case_id, verificationCode: row.verification_code, issuedAt: row.issued_at, borrowerName: row.borrower_name, borrowerMobile: row.borrower_mobile, vehicleRegistration: row.vehicle_registration, vehicleModel: row.vehicle_model, custodyId: row.custody_id ?? undefined, paymentReference: row.payment_reference ?? undefined, issuedByName: row.issued_by_name ?? undefined, signedToken: row.signed_token ?? undefined, lifecycle };
 }
 
 async function auth(req, res, next) {
@@ -247,7 +251,10 @@ app.get('/api/workspace', auth, async (req, res) => {
   });
   const notificationRows = await listNotifications(pool, req.user);
   const releasePassRows = isAgent ? [] : await query(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC', [req.user.tenantId]);
-  res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map(mapReleasePass) });
+  const eventRows = isAgent ? [] : await query(pool, 'SELECT release_pass_id, event FROM release_pass_events WHERE tenant_id = ?', [req.user.tenantId]);
+  const lifecycleByPass = new Map();
+  for (const row of eventRows) if (row.event === 'revoked' || !lifecycleByPass.get(row.release_pass_id)) lifecycleByPass.set(row.release_pass_id, row.event); // revoked wins
+  res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -585,14 +592,33 @@ app.post('/api/cases/:id/release-pass', auth, requirePermission(PERMISSIONS.RELE
   const passId = `RP-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const verificationCode = crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
   const updatedAt = isoNow();
+  const exp = new Date(Date.now() + RELEASE_TTL_MS).toISOString();
+  const signedToken = releaseSigner.configured ? releaseSigner.sign({ passId, orgId: req.user.tenantId, issuedAt: updatedAt, exp, reg: String(caseRow.registration).slice(-4) }) : null;
   await tx(pool, async (conn) => {
-    await persistReleasePass(conn, { id: passId, tenantId: req.user.tenantId, caseId: caseRow.id, issuedByUserId: req.user.id, verificationCode, issuedAt: updatedAt, borrowerName: caseRow.borrower_name, borrowerMobile: caseRow.borrower_mobile, vehicleRegistration: caseRow.registration, vehicleModel: caseRow.make_model, custodyId: caseRow.custody_id, paymentReference: caseRow.payment_reference });
+    await persistReleasePass(conn, { id: passId, tenantId: req.user.tenantId, caseId: caseRow.id, issuedByUserId: req.user.id, verificationCode, issuedAt: updatedAt, borrowerName: caseRow.borrower_name, borrowerMobile: caseRow.borrower_mobile, vehicleRegistration: caseRow.registration, vehicleModel: caseRow.make_model, custodyId: caseRow.custody_id, paymentReference: caseRow.payment_reference, signedToken, keyId: releaseSigner.keyId });
     await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Release pass issued', detail: `${passId} is ready to print for ${caseRow.borrower_name}.`, tone: 'green' });
     await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'release_pass.issued', detail: `Issued ${passId}.` });
   });
   const updatedCase = await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id]);
   const releasePass = await queryOne(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.id = ?', [passId]);
   res.json({ case: mapCase(updatedCase), releasePass: mapReleasePass(releasePass) });
+});
+
+app.post('/api/cases/:id/release-revocation', auth, requirePermission(PERMISSIONS.RELEASE_REVOKE), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const pass = await queryOne(pool, 'SELECT * FROM release_passes WHERE tenant_id = ? AND case_id = ?', [req.user.tenantId, caseRow.id]);
+  if (!pass) return res.status(422).json({ error: 'There is no release pass to revoke.' });
+  const reason = String(req.body?.reason || '').trim();
+  try {
+    await tx(pool, async (conn) => {
+      await query(conn, "INSERT INTO release_pass_events (tenant_id, release_pass_id, case_id, event, actor_user_id, reason, created_at) VALUES (?, ?, ?, 'revoked', ?, ?, ?)", [req.user.tenantId, pass.id, caseRow.id, req.user.id, reason || null, isoNow()]);
+      await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'release_pass.revoked', detail: reason || `Revoked ${pass.id}.` });
+    });
+  } catch {
+    return res.status(409).json({ error: 'This release pass is already revoked.' });
+  }
+  res.json({ ok: true });
 });
 
 app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLOSE), async (req, res) => {
@@ -602,6 +628,7 @@ app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLO
   if (actionError) return res.status(422).json({ error: actionError });
   await tx(pool, async (conn) => {
     await query(conn, "UPDATE recovery_cases SET status = 'closed', updated_at = ? WHERE id = ? AND tenant_id = ?", [isoNow(), caseRow.id, req.user.tenantId]);
+    if (caseRow.release_pass_id) await query(conn, "INSERT IGNORE INTO release_pass_events (tenant_id, release_pass_id, case_id, event, actor_user_id, reason, created_at) VALUES (?, ?, ?, 'redeemed', ?, NULL, ?)", [req.user.tenantId, caseRow.release_pass_id, caseRow.id, req.user.id, isoNow()]);
     await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.closed', detail: 'Finance user recorded final release and closure.' });
   });
   res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
@@ -610,6 +637,47 @@ app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLO
 app.post('/api/notifications/read-all', auth, async (req, res) => {
   await markNotificationsRead(pool, req.user, isoNow());
   res.status(204).end();
+});
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function verifyPageHtml({ state, financer, passId, reg }) {
+  const map = {
+    valid: ['#168260', '#e5f6ef', 'Valid release pass', 'This pass is active. Check the vehicle details below before releasing.'],
+    revoked: ['#be4e4b', '#fff0ee', 'Revoked — do not release', 'The finance company has revoked this release pass.'],
+    redeemed: ['#a35f0c', '#fff3df', 'Already redeemed', 'This vehicle has already been released against this pass.'],
+    expired: ['#a35f0c', '#fff3df', 'Expired pass', 'This pass is past its validity. Contact the finance company.'],
+    invalid: ['#be4e4b', '#fff0ee', 'Invalid pass', 'This code is not a recognized release pass.'],
+  };
+  const [color, soft, title, message] = map[state] || map.invalid;
+  const details = passId ? `<dl><div><dt>Finance company</dt><dd>${escapeHtml(financer)}</dd></div><div><dt>Pass ID</dt><dd>${escapeHtml(passId)}</dd></div><div><dt>Vehicle</dt><dd>${escapeHtml(reg)}</dd></div></dl>` : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Release pass verification</title><style>body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#f6f8fb;color:#17283d;display:grid;place-items:center;min-height:100vh;padding:20px}.card{width:100%;max-width:420px;background:#fff;border:1px solid #e6ebf1;border-radius:14px;box-shadow:0 18px 45px rgba(18,45,78,.10);overflow:hidden}.top{background:${soft};color:${color};padding:22px;font-weight:800;font-size:18px}.body{padding:20px}p{color:#54657c;font-size:13px;line-height:1.5;margin:0 0 14px}dl{margin:0;display:grid;gap:10px}dl div{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #eef2f6;padding-top:10px}dt{color:#8a97a7;font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:800}dd{margin:0;font-weight:700;font-size:13px;text-align:right}.brand{padding:14px 20px;border-top:1px solid #eef2f6;color:#8a97a7;font-size:11px;font-weight:700}</style></head><body><div class="card"><div class="top">${title}</div><div class="body"><p>${message}</p>${details}</div><div class="brand">Handoff · recovery operations</div></div></body></html>`;
+}
+
+app.get('/r/:token', async (req, res) => {
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  // ponytail: no rate-limit here yet — pilot is LAN-only; add it in the hardening phase (Phase 7).
+  const result = releaseSigner.verify(req.params.token);
+  let state = 'invalid';
+  let financer = '';
+  let passId = '';
+  let reg = '';
+  if (result.valid) {
+    const pass = await queryOne(pool, 'SELECT release_passes.*, tenants.name AS tenant_name FROM release_passes JOIN tenants ON tenants.id = release_passes.tenant_id WHERE release_passes.id = ?', [result.claims.passId]);
+    if (pass) {
+      const events = await query(pool, 'SELECT event FROM release_pass_events WHERE release_pass_id = ?', [pass.id]);
+      const set = new Set(events.map((row) => row.event));
+      state = set.has('revoked') ? 'revoked' : set.has('redeemed') ? 'redeemed' : 'valid';
+      financer = pass.tenant_name;
+      passId = pass.id;
+      reg = maskRegistration(pass.vehicle_registration);
+    }
+  } else if (result.reason === 'expired') {
+    state = 'expired';
+  }
+  res.type('html').send(verifyPageHtml({ state, financer, passId, reg }));
 });
 
 const distDirectory = join(appDirectory, '..', 'dist');

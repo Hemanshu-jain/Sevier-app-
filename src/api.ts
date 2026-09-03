@@ -146,6 +146,7 @@ export const api = {
   confirmPayment: (token: string, caseId: string, reference: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/payment-confirmation`, { method: 'POST', body: JSON.stringify({ reference }) }, token),
   releasePass: (token: string, caseId: string) => request<{ case: RecoveryCase; releasePass: ReleasePass }>(`/api/cases/${caseId}/release-pass`, { method: 'POST' }, token),
   closeCase: (token: string, caseId: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/close`, { method: 'POST' }, token),
+  revokeReleasePass: (token: string, caseId: string, reason: string) => request<{ ok: boolean }>(`/api/cases/${caseId}/release-revocation`, { method: 'POST', body: JSON.stringify({ reason }) }, token),
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
   evidence: (token: string, caseId: string) => request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, {}, token),
   evidenceFile: async (token: string, evidenceId: string) => {

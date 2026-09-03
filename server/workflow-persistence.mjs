@@ -24,8 +24,9 @@ export async function persistReleasePass(executor, record) {
     [record.id, record.issuedAt, record.caseId, record.tenantId]);
   if (result.affectedRows !== 1) throw new Error('The recovery case could not be updated for release.');
   await query(executor,
-    `INSERT INTO release_passes (id, tenant_id, case_id, issued_by_user_id, verification_code, issued_at, borrower_name, borrower_mobile, vehicle_registration, vehicle_model, custody_id, payment_reference)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO release_passes (id, tenant_id, case_id, issued_by_user_id, verification_code, issued_at, borrower_name, borrower_mobile, vehicle_registration, vehicle_model, custody_id, payment_reference, signed_token, key_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [record.id, record.tenantId, record.caseId, record.issuedByUserId, record.verificationCode, record.issuedAt,
-     record.borrowerName, record.borrowerMobile, record.vehicleRegistration, record.vehicleModel, record.custodyId, record.paymentReference]);
+     record.borrowerName, record.borrowerMobile, record.vehicleRegistration, record.vehicleModel, record.custodyId, record.paymentReference,
+     record.signedToken ?? null, record.keyId ?? null]);
 }

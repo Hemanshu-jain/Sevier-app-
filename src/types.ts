@@ -104,6 +104,8 @@ export interface ReleasePass {
   custodyId?: string;
   paymentReference?: string;
   issuedByName?: string;
+  signedToken?: string;
+  lifecycle?: 'valid' | 'revoked' | 'redeemed' | 'expired';
 }
 
 export interface AuditEvent {

@@ -18,7 +18,7 @@ test('migrate builds the schema, is idempotent, and declares immutability trigge
     }
 
     const [[trg]] = await pool.query("SELECT COUNT(*) AS n FROM information_schema.triggers WHERE trigger_schema = DATABASE()");
-    assert.equal(trg.n, 8, 'expected 8 immutability triggers');
+    assert.equal(trg.n, 10, 'expected 10 immutability triggers');
 
     await pool.query("INSERT INTO tenants (id, name) VALUES ('t-mysqltest', 'Test Co') ON DUPLICATE KEY UPDATE name = VALUES(name)");
     const [[row]] = await pool.query("SELECT name FROM tenants WHERE id = 't-mysqltest'");
