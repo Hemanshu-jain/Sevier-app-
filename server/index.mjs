@@ -114,8 +114,8 @@ function mapEvidence(row) {
   return { id: row.id, caseId: row.case_id, originalName: row.original_name, mimeType: row.mime_type, byteSize: row.byte_size, latitude: row.latitude, longitude: row.longitude, capturedAt: row.captured_at, agentName: row.agent_name ?? undefined };
 }
 
-function mapAgent(row, activeCases = 0) {
-  return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth: 0, status: row.active ? 'Active' : 'Suspended' };
+function mapAgent(row, activeCases = 0, completedThisMonth = 0) {
+  return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth, status: row.active ? 'Active' : 'Suspended' };
 }
 
 function mapReleasePass(row) {
@@ -236,7 +236,15 @@ app.get('/api/workspace', auth, async (req, res) => {
     ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? AND case_id IN (?) ORDER BY created_at DESC', [req.user.tenantId, visibleCaseIds]) : [])
     : await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC', [req.user.tenantId]);
   const agentRows = isAgent ? [] : await query(pool, "SELECT id, name, mobile, city, active FROM users WHERE tenant_id = ? AND role = 'agent' ORDER BY name", [req.user.tenantId]);
-  const agentData = agentRows.map((agent) => mapAgent(agent, caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status !== 'closed').length));
+  // ponytail: month start in ISO; compares against updated_at (close time) as the "completed" proxy — a dedicated closed_at is the exact fix if it ever matters.
+  const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
+  const monthStartIso = monthStart.toISOString();
+  const agentData = agentRows.map((agent) => {
+    const theirs = caseRows.filter((item) => item.assigned_agent_user_id === agent.id);
+    const active = theirs.filter((item) => item.status !== 'closed').length;
+    const completed = theirs.filter((item) => item.status === 'closed' && item.updated_at >= monthStartIso).length;
+    return mapAgent(agent, active, completed);
+  });
   const notificationRows = await listNotifications(pool, req.user);
   const releasePassRows = isAgent ? [] : await query(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC', [req.user.tenantId]);
   res.json({ cases: caseRows.map(mapCase), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map(mapReleasePass) });
