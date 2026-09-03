@@ -43,3 +43,7 @@
 .field-app button:focus-visible,.field-app a:focus-visible,.field-app input:focus-visible,.field-app textarea:focus-visible,.field-app select:focus-visible{outline:3px solid #87b4ff;outline-offset:2px}
 .custody-agent-note{display:grid;gap:3px;margin:10px 0 0;padding:9px;border:1px solid #d9e5f3;border-radius:6px;background:#f7faff;color:#5e7085;font-size:9px;line-height:1.5}.custody-agent-note strong{color:#355578;font-size:9px}
 @media (max-width:370px){.field-home,.field-case{padding-left:12px;padding-right:12px}.field-summary.three{grid-template-columns:1fr 1fr}.field-summary.three span:last-child{grid-column:1/-1}.field-checklist-select label{grid-template-columns:1fr}.field-quick-actions{grid-template-columns:1fr}}
+
+/* ---- polish pass: tap feedback (appended) ---- */
+.field-primary,.field-secondary,.field-assignment,.field-list-row,.field-tabs button,.field-file-picker,.field-location{transition:transform .1s ease,background-color .15s ease,box-shadow .15s ease,border-color .15s ease}
+.field-primary:active,.field-secondary:active,.field-assignment:active,.field-file-picker:active,.field-location:active{transform:scale(.985)}
