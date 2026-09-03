@@ -12,6 +12,8 @@
     "db:backup": "node server/backup.mjs",
     "preview": "vite preview",
     "start": "node --env-file-if-exists=.env server/index.mjs",
+    "serve:test": "npm run build && npm start",
+    "tunnel": "cloudflared tunnel --url http://localhost:8787",
     "mobile:add": "cap add android",
     "mobile:sync": "npm run build && cap sync android",
     "mobile:open": "cap open android"

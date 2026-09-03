@@ -44,8 +44,12 @@ mkdirSync(uploadDirectory, { recursive: true });
 
 // Per-IP limits for the unauthenticated surface. Generous enough never to bite a real
 // person; low enough to blunt SMS bombing, OTP brute force, and pass-verify scraping.
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 25 });
-const verifyPageLimiter = rateLimit({ windowMs: 60 * 1000, max: 60 });
+// Production only: in dev/test many people can share one IP (e.g. behind a Cloudflare
+// tunnel), where per-IP limiting would falsely throttle the whole group.
+// For a real proxied deployment also set `app.set('trust proxy', 1)` so req.ip is the client's.
+const passThroughLimiter = (_req, _res, next) => next();
+const otpLimiter = config.nodeEnv === 'production' ? rateLimit({ windowMs: 15 * 60 * 1000, max: 25 }) : passThroughLimiter;
+const verifyPageLimiter = config.nodeEnv === 'production' ? rateLimit({ windowMs: 60 * 1000, max: 60 }) : passThroughLimiter;
 
 const isoNow = () => new Date().toISOString();
 const parseJson = (value) => (value == null ? undefined : typeof value === 'string' ? JSON.parse(value) : value);
