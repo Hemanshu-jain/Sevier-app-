@@ -26,6 +26,7 @@ import { persistCustody, persistReleasePass } from './workflow-persistence.mjs';
 import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from './field-mutations.mjs';
 import { listNotifications, markNotificationsRead } from './notification-access.mjs';
 import { createReleaseSigner } from './release-signing.mjs';
+import { rateLimit } from './rate-limit.mjs';
 
 const app = express();
 const config = loadConfig();
@@ -40,6 +41,11 @@ const maskRegistration = (reg) => String(reg || '').replace(/.(?=.{4})/g, '•')
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const uploadDirectory = join(appDirectory, 'uploads');
 mkdirSync(uploadDirectory, { recursive: true });
+
+// Per-IP limits for the unauthenticated surface. Generous enough never to bite a real
+// person; low enough to blunt SMS bombing, OTP brute force, and pass-verify scraping.
+const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 25 });
+const verifyPageLimiter = rateLimit({ windowMs: 60 * 1000, max: 60 });
 
 const isoNow = () => new Date().toISOString();
 const parseJson = (value) => (value == null ? undefined : typeof value === 'string' ? JSON.parse(value) : value);
@@ -196,7 +202,7 @@ function deleteUploads(files) {
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/auth/request-otp', async (req, res) => {
+app.post('/api/auth/request-otp', otpLimiter, async (req, res) => {
   try {
     const mobile = String(req.body?.mobile || '');
     const result = await requestSignInOtp({ database: pool, otpProvider, mobile, requestIp: req.ip });
@@ -210,7 +216,7 @@ app.post('/api/auth/request-otp', async (req, res) => {
   }
 });
 
-app.post('/api/auth/verify-otp', async (req, res) => {
+app.post('/api/auth/verify-otp', otpLimiter, async (req, res) => {
   try {
     const result = await verifySignInOtp({
       database: pool,
@@ -229,7 +235,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
   }
 });
 
-app.post('/api/agent/signup/request-otp', async (req, res) => {
+app.post('/api/agent/signup/request-otp', otpLimiter, async (req, res) => {
   try {
     const result = await requestSignUpOtp({ database: pool, otpProvider, mobile: String(req.body?.mobile || ''), requestIp: req.ip });
     return res.json(result);
@@ -240,7 +246,7 @@ app.post('/api/agent/signup/request-otp', async (req, res) => {
   }
 });
 
-app.post('/api/agent/signup/verify', async (req, res) => {
+app.post('/api/agent/signup/verify', otpLimiter, async (req, res) => {
   try {
     const result = await verifySignUpOtp({ database: pool, otpProvider, challengeId: String(req.body?.challengeId || ''), mobile: String(req.body?.mobile || ''), code: String(req.body?.code || '') });
     const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [result.userId]);
@@ -774,9 +780,8 @@ function verifyPageHtml({ state, financer, passId, reg }) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Release pass verification</title><style>body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#f6f8fb;color:#17283d;display:grid;place-items:center;min-height:100vh;padding:20px}.card{width:100%;max-width:420px;background:#fff;border:1px solid #e6ebf1;border-radius:14px;box-shadow:0 18px 45px rgba(18,45,78,.10);overflow:hidden}.top{background:${soft};color:${color};padding:22px;font-weight:800;font-size:18px}.body{padding:20px}p{color:#54657c;font-size:13px;line-height:1.5;margin:0 0 14px}dl{margin:0;display:grid;gap:10px}dl div{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #eef2f6;padding-top:10px}dt{color:#8a97a7;font-size:11px;text-transform:uppercase;letter-spacing:.5px;font-weight:800}dd{margin:0;font-weight:700;font-size:13px;text-align:right}.brand{padding:14px 20px;border-top:1px solid #eef2f6;color:#8a97a7;font-size:11px;font-weight:700}</style></head><body><div class="card"><div class="top">${title}</div><div class="body"><p>${message}</p>${details}</div><div class="brand">Handoff · recovery operations</div></div></body></html>`;
 }
 
-app.get('/r/:token', async (req, res) => {
+app.get('/r/:token', verifyPageLimiter, async (req, res) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-  // ponytail: no rate-limit here yet — pilot is LAN-only; add it in the hardening phase (Phase 7).
   const result = releaseSigner.verify(req.params.token);
   let state = 'invalid';
   let financer = '';

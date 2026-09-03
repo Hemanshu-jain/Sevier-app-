@@ -11,7 +11,9 @@ export function loadConfig(env = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535.');
 
   const value = (name) => env[name] || (nodeEnv === 'production' ? '' : developmentDefaults[name] || '');
-  const required = ['DATABASE_URL', 'OBJECT_STORAGE_ENDPOINT', 'OBJECT_STORAGE_BUCKET', 'MSG91_AUTH_KEY', 'MSG91_OTP_TEMPLATE_ID', 'PUBLIC_WEB_URL'];
+  // Release signing keys are required in production: without them, passes issue unsigned and the
+  // public QR verify page cannot vouch for them, so fail fast at boot instead of shipping bad passes.
+  const required = ['DATABASE_URL', 'OBJECT_STORAGE_ENDPOINT', 'OBJECT_STORAGE_BUCKET', 'MSG91_AUTH_KEY', 'MSG91_OTP_TEMPLATE_ID', 'PUBLIC_WEB_URL', 'RELEASE_SIGNING_PRIVATE_KEY', 'RELEASE_SIGNING_PUBLIC_KEY', 'RELEASE_SIGNING_KEY_ID'];
   const missing = nodeEnv === 'production' ? required.filter((name) => !value(name)) : [];
   if (missing.length) throw new Error(`Missing production settings: ${missing.join(', ')}`);
 
