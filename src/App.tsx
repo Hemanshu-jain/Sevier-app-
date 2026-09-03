@@ -382,7 +382,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     register: <RegisterPage cases={visibleCases} monthLabel={monthLabel} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
-    custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
+    custody: <CustodyPage custody={custody} cases={cases} session={session} canReview={session.user.permissions.includes('custody.review')} onReviewed={loadWorkspace} onNotice={setActionNotice} onError={setActionError} onSelectCase={setSelectedCaseId} />,
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
@@ -530,8 +530,58 @@ function GroupBroadcaster({ group, onCancel, onSend }: { group: AgentGroup; onCa
   </form>;
 }
 
-function CustodyPage({ custody, cases, onSelectCase }: { custody: CustodyRecord[]; cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">Digital parking check slips</p><h2>Custody records</h2><p className="page-copy">A condition and handover record is created when an agent reports custody.</p></div></div><article className="card data-card"><div className="table-scroll"><table><thead><tr><th>Certificate</th><th>Vehicle / case</th><th>Parking location</th><th>Agent</th><th>Checklist</th><th /></tr></thead><tbody>{custody.length ? custody.map((item) => { const caseItem = cases.find((current) => current.id === item.caseId); return <tr className="row-action" role="button" tabIndex={0} aria-label={`Open custody certificate ${item.id}`} key={item.id} onClick={() => onSelectCase(item.caseId)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.caseId))}><td><strong className="token-id">{item.id}</strong><small>{item.createdAt}</small></td><td>{caseItem?.vehicle.registration}<small>{item.caseId} · {caseItem?.vehicle.makeModel}</small></td><td>{item.yardName}<small>{item.arrivalTime}</small></td><td>{item.agentName}</td><td><span className="checked-count"><Check size={12} /> {item.checklist}/{checklist.length}</span></td><td><ChevronRight size={17} /></td></tr>; }) : <tr><td colSpan={6}><div className="empty-table">No custody certificates have been submitted yet.</div></td></tr>}</tbody></table></div></article><section className="receipt-grid">{checklist.map((item) => <span key={item}><Check size={14} /> {item}</span>)}</section></>;
+function CustodyPage({ custody, cases, session, canReview, onReviewed, onNotice, onError, onSelectCase }: { custody: CustodyRecord[]; cases: RecoveryCase[]; session: Session; canReview: boolean; onReviewed: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void; onSelectCase: (id: string) => void }) {
+  const needsReviewStatus = (item: CustodyRecord) => cases.find((current) => current.id === item.caseId)?.status === 'custody_review';
+  const ordered = useMemo(() => [...custody].sort((a, b) => Number(needsReviewStatus(b)) - Number(needsReviewStatus(a))), [custody, cases]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = ordered.find((item) => item.id === selectedId) ?? ordered[0] ?? null;
+  const selectedCase = selected ? cases.find((current) => current.id === selected.caseId) ?? null : null;
+  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [mode, setMode] = useState<'approve' | 'changes' | null>(null);
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => { setMode(null); setNote(''); }, [selected?.id]);
+  useEffect(() => {
+    if (!selected) { setEvidence([]); return; }
+    setEvidenceLoading(true);
+    api.evidence(session.token, selected.caseId).then((result) => setEvidence(result.evidence)).catch(() => setEvidence([])).finally(() => setEvidenceLoading(false));
+  }, [selected?.caseId, session.token]);
+
+  const needsReview = selectedCase?.status === 'custody_review';
+  const pendingCount = ordered.filter(needsReviewStatus).length;
+
+  async function submit() {
+    if (!selected || !mode) return;
+    if (mode === 'changes' && !note.trim()) { onError('Add a note explaining the required changes.'); return; }
+    setSubmitting(true); onError('');
+    try {
+      if (mode === 'changes') { await api.requestCustodyChanges(session.token, selected.caseId, note.trim()); onNotice('Sent back to the agent for changes.'); }
+      else { await api.approveCustody(session.token, selected.caseId, note.trim()); onNotice('Custody approved. The case moved to payment.'); }
+      setMode(null); setNote('');
+      await onReviewed();
+    } catch (error) { onError(error instanceof Error ? error.message : 'The custody review could not be saved.'); }
+    finally { setSubmitting(false); }
+  }
+
+  return <><div className="page-heading"><div><p className="eyebrow">Custody review workspace</p><h2>Custody records</h2><p className="page-copy">{pendingCount > 0 ? `${pendingCount} custody report${pendingCount === 1 ? '' : 's'} awaiting your review.` : 'Review the condition slip, agent evidence, and GPS before approving a handover.'}</p></div></div>
+    {ordered.length === 0 ? <article className="card"><div className="empty-table">No custody certificates have been submitted yet.</div></article> : <div className="custody-workspace">
+      <aside className="custody-list">{ordered.map((item) => { const kase = cases.find((current) => current.id === item.caseId); const pending = kase?.status === 'custody_review'; return <button key={item.id} type="button" className={`custody-list-row ${selected?.id === item.id ? 'active' : ''}`} onClick={() => setSelectedId(item.id)}><div className="custody-list-top"><strong>{kase?.vehicle.registration ?? item.caseId}</strong><span className={`review-badge ${pending ? 'pending' : 'done'}`}>{pending ? 'Needs review' : 'Reviewed'}</span></div><small>{item.caseId} · {item.yardName}</small><small>{item.agentName} · {new Date(item.createdAt).toLocaleDateString('en-IN')}</small></button>; })}</aside>
+      {selected && <section className="custody-detail card">
+        <div className="custody-detail-head"><div><p className="eyebrow">{selected.id}</p><h3>{selectedCase?.vehicle.registration ?? selected.caseId}</h3><p className="page-copy">{selectedCase?.vehicle.makeModel} · {selectedCase?.borrower.name}</p></div>{selectedCase && <StatusPill status={selectedCase.status} />}</div>
+        <dl className="detail-grid"><div><dt>Parking yard</dt><dd>{selected.yardName}</dd></div><div><dt>Arrival</dt><dd>{new Date(selected.arrivalTime).toLocaleString()}</dd></div><div><dt>Parking rate</dt><dd>₹{selected.parkingRate}/day</dd></div><div><dt>Agent</dt><dd>{selected.agentName}</dd></div><div><dt>Checklist</dt><dd>{selected.checklist}/{checklist.length} points</dd></div><div><dt>Submitted</dt><dd>{new Date(selected.createdAt).toLocaleString()}</dd></div></dl>
+        {selected.inspection && <><p className="section-label">14-point inspection</p><div className="inspection-summary">{Object.entries(selected.inspection).map(([item, condition]) => <span key={item}><strong>{item}</strong><small>{condition}</small></span>)}</div></>}
+        {selected.customNote && <p className="custody-agent-note"><strong>Agent note</strong>{selected.customNote}</p>}
+        <EvidencePanel evidence={evidence} loading={evidenceLoading} token={session.token} />
+        {selected.financeReviewedAt && <div className="payment-detail"><Check size={16} /><div><strong>Approved by finance</strong><span>{selected.financeReviewNote || 'Custody report accepted'}</span><small>{new Date(selected.financeReviewedAt).toLocaleString()}</small></div></div>}
+        {needsReview && canReview && <div className="custody-review-actions">{mode
+          ? <><label className="field-label">{mode === 'changes' ? 'What must the agent correct?' : 'Approval note (optional)'}<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder={mode === 'changes' ? 'Explain what needs to change before approval.' : 'Optional note kept on the record.'} autoFocus /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={() => { setMode(null); setNote(''); }}>Cancel</button><button className={mode === 'changes' ? 'secondary-button' : 'primary-button'} type="button" disabled={submitting} onClick={submit}>{mode === 'changes' ? 'Send back to agent' : 'Approve custody'}</button></div></>
+          : <><p className="section-label">Finance decision</p><div className="drawer-actions"><button className="secondary-button" type="button" onClick={() => setMode('changes')}>Request changes</button><button className="primary-button" type="button" onClick={() => setMode('approve')}><PackageCheck size={15} /> Approve custody</button></div></>}</div>}
+        <button className="text-button custody-open-case" type="button" onClick={() => onSelectCase(selected.caseId)}>Open full case <ChevronRight size={14} /></button>
+      </section>}
+    </div>}
+    <section className="receipt-grid">{checklist.map((item) => <span key={item}><Check size={14} /> {item}</span>)}</section></>;
 }
 
 function ReleasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
