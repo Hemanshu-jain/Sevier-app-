@@ -19,14 +19,16 @@ import {
   Plus,
   Printer,
   Search,
+  Send,
   Settings,
   ShieldCheck,
+  Trash2,
   UsersRound,
   X,
 } from 'lucide-react';
 import { api } from './api';
 import type { AccountInput, DirectoryAgent, Session } from './api';
-import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import QRCode from 'qrcode';
 import { caseStatusLabel } from './types';
 import { financeCaseAction } from './finance-case-action';
@@ -87,6 +89,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
   const [releasePasses, setReleasePasses] = useState<ReleasePass[]>([]);
   const [agentList, setAgentList] = useState<Agent[]>([]);
+  const [groups, setGroups] = useState<AgentGroup[]>([]);
   const [appNotifications, setAppNotifications] = useState<AppNotification[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogType>(null);
@@ -128,6 +131,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     setCustody(workspace.custody);
     setReleasePasses(workspace.releasePasses);
     setAgentList(workspace.agents);
+    setGroups(workspace.groups ?? []);
     setAppNotifications(workspace.notifications);
   }
 
@@ -377,7 +381,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
     register: <RegisterPage cases={visibleCases} monthLabel={monthLabel} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
-    agents: <AgentsPage agents={agentList} cases={cases} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} />,
+    agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
     custody: <CustodyPage custody={custody} cases={cases} onSelectCase={setSelectedCaseId} />, 
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
@@ -476,8 +480,54 @@ function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; o
   return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.length ? cases.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={showLoan ? 7 : 6}><div className="empty-table">No cases match this view.</div></td></tr>}</tbody></table></div></article>;
 }
 
-function AgentsPage({ agents, cases, canManage, onAdd, onChangeStatus, onSelectCase }: { agents: Agent[]; cases: RecoveryCase[]; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>completed this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section></>;
+function AgentsPage({ agents, groups, cases, session, canManage, onAdd, onChangeStatus, onSelectCase, onGroupsChanged, onNotice, onError }: { agents: Agent[]; groups: AgentGroup[]; cases: RecoveryCase[]; session: Session; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void; onGroupsChanged: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void }) {
+  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>completed this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section>{canManage && <GroupsPanel groups={groups} agents={agents} session={session} onChanged={onGroupsChanged} onNotice={onNotice} onError={onError} />}</>;
+}
+
+// Agent groups: build a named set of roster agents, then send one message that reaches each member individually.
+function GroupsPanel({ groups, agents, session, onChanged, onNotice, onError }: { groups: AgentGroup[]; agents: Agent[]; session: Session; onChanged: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void }) {
+  const [editing, setEditing] = useState<'new' | string | null>(null);
+  const [messaging, setMessaging] = useState<string | null>(null);
+  const activeAgents = agents.filter((agent) => agent.status === 'Active');
+
+  async function run(work: () => Promise<void>, done: string) {
+    try { await work(); await onChanged(); onNotice(done); setEditing(null); setMessaging(null); }
+    catch (error) { onError(error instanceof Error ? error.message : 'The group action could not be completed.'); }
+  }
+
+  return <section className="groups-section"><div className="card-heading"><div><h3>Agent groups</h3><p>Message several agents at once — each still receives their own notification.</p></div>{editing !== 'new' && <button className="secondary-button" onClick={() => { setEditing('new'); setMessaging(null); }}><Plus size={15} /> New group</button>}</div>
+    {editing === 'new' && <GroupEditor agents={activeAgents} onCancel={() => setEditing(null)} onSave={(name, agentIds) => run(() => api.createGroup(session.token, { name, agentIds }).then(() => undefined), 'Group created.')} />}
+    <div className="groups-list">{groups.length === 0 && editing !== 'new' ? <div className="evidence-empty">No agent groups yet. Create one to send bulk updates.</div> : groups.map((group) => <article className="card group-card" key={group.id}>
+      {editing === group.id
+        ? <GroupEditor group={group} agents={activeAgents} onCancel={() => setEditing(null)} onSave={(name, agentIds) => run(() => api.updateGroup(session.token, group.id, { name, agentIds }).then(() => undefined), 'Group updated.')} />
+        : messaging === group.id
+        ? <GroupBroadcaster group={group} onCancel={() => setMessaging(null)} onSend={(title, detail) => run(() => api.broadcastGroup(session.token, group.id, { title, detail }).then(() => undefined), `Message sent to ${group.members.length} agent(s).`)} />
+        : <><div className="group-card-top"><div><h4>{group.name}</h4><small>{group.members.length} member{group.members.length === 1 ? '' : 's'}</small></div><div className="group-card-actions"><button className="primary-button" disabled={group.members.length === 0} title={group.members.length === 0 ? 'Add members first' : ''} onClick={() => { setMessaging(group.id); setEditing(null); }}><Send size={14} /> Message</button><button className="text-button" onClick={() => { setEditing(group.id); setMessaging(null); }}>Edit</button><button className="icon-button danger" aria-label={`Delete group ${group.name}`} onClick={() => { if (window.confirm(`Delete the group “${group.name}”? Members are not removed from your roster.`)) run(() => api.deleteGroup(session.token, group.id), 'Group deleted.'); }}><Trash2 size={15} /></button></div></div>{group.members.length > 0 && <div className="assigned-agents">{group.members.map((member) => <span key={member.id} className="agent-chip">{member.name}</span>)}</div>}</>}
+    </article>)}</div>
+  </section>;
+}
+
+function GroupEditor({ group, agents, onCancel, onSave }: { group?: AgentGroup; agents: Agent[]; onCancel: () => void; onSave: (name: string, agentIds: string[]) => void }) {
+  const [name, setName] = useState(group?.name ?? '');
+  const [selected, setSelected] = useState<Set<string>>(new Set(group?.members.map((member) => member.id) ?? []));
+  const toggle = (id: string) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  return <form className="group-editor" onSubmit={(event) => { event.preventDefault(); onSave(name.trim(), [...selected]); }}>
+    <label className="field-label">Group name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. North-zone riders" required minLength={2} maxLength={100} /></label>
+    <p className="section-label">Members</p>
+    {agents.length === 0 ? <div className="evidence-empty">Add active agents to your roster first.</div> : <div className="assign-agent-list">{agents.map((agent) => <label className="assign-agent-row" key={agent.id}><input type="checkbox" checked={selected.has(agent.id)} onChange={() => toggle(agent.id)} /><span><strong>{agent.name}</strong><small>{agent.city} · {agent.mobile}</small></span></label>)}</div>}
+    <div className="modal-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="submit" disabled={name.trim().length < 2}><Check size={15} /> {group ? 'Save group' : 'Create group'}</button></div>
+  </form>;
+}
+
+function GroupBroadcaster({ group, onCancel, onSend }: { group: AgentGroup; onCancel: () => void; onSend: (title: string, detail: string) => void }) {
+  const [title, setTitle] = useState('');
+  const [detail, setDetail] = useState('');
+  return <form className="group-editor" onSubmit={(event) => { event.preventDefault(); onSend(title.trim(), detail.trim()); }}>
+    <p className="section-label">Message “{group.name}” · {group.members.length} agent{group.members.length === 1 ? '' : 's'}</p>
+    <label className="field-label">Subject<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Report to yard by 6 PM" required minLength={2} maxLength={120} /></label>
+    <label className="field-label">Message<textarea value={detail} onChange={(event) => setDetail(event.target.value)} placeholder="Write the update every member should receive." required minLength={2} maxLength={1000} /></label>
+    <div className="modal-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="submit" disabled={title.trim().length < 2 || detail.trim().length < 2}><Send size={15} /> Send to all members</button></div>
+  </form>;
 }
 
 function CustodyPage({ custody, cases, onSelectCase }: { custody: CustodyRecord[]; cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {

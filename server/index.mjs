@@ -17,6 +17,7 @@ import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contra
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
+import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
 import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
@@ -297,7 +298,8 @@ app.get('/api/workspace', auth, async (req, res) => {
   const assignmentRows = isAgent ? [] : await query(pool, 'SELECT ca.case_id, ca.agent_user_id, users.name FROM case_assignments ca JOIN users ON users.id = ca.agent_user_id WHERE ca.tenant_id = ? AND ca.active = 1', [req.user.tenantId]);
   const agentsByCase = new Map();
   for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name }); agentsByCase.set(row.case_id, list); }
-  res.json({ cases: caseRows.map((row) => mapCase(row, agentsByCase.get(row.id) || [])), custody: custodyRows.map(mapCustody), agents: agentData, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
+  const groups = isAgent ? [] : await listGroups({ database: pool, tenantId: req.user.tenantId });
+  res.json({ cases: caseRows.map((row) => mapCase(row, agentsByCase.get(row.id) || [])), custody: custodyRows.map(mapCustody), agents: agentData, groups, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -334,6 +336,52 @@ app.post('/api/agents/:id/link', auth, requirePermission(PERMISSIONS.AGENT_MANAG
     return res.status(201).json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: 'Active' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not add the agent.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.get('/api/agent-groups', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  res.json({ groups: await listGroups({ database: pool, tenantId: req.user.tenantId }) });
+});
+
+app.post('/api/agent-groups', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  try {
+    const group = await createGroup({ database: pool, tenantId: req.user.tenantId, name: req.body?.name, agentIds: req.body?.agentIds });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent_group.created', detail: `Agent group “${group.name}” was created.` });
+    return res.status(201).json({ group });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The group could not be created.' });
+  }
+});
+
+app.put('/api/agent-groups/:id', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  try {
+    await updateGroup({ database: pool, tenantId: req.user.tenantId, groupId: req.params.id, name: req.body?.name, agentIds: req.body?.agentIds });
+    return res.json({ groups: await listGroups({ database: pool, tenantId: req.user.tenantId }) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The group could not be updated.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.delete('/api/agent-groups/:id', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  try {
+    await deleteGroup({ database: pool, tenantId: req.user.tenantId, groupId: req.params.id });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent_group.deleted', detail: 'An agent group was deleted.' });
+    return res.status(204).end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The group could not be deleted.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.post('/api/agent-groups/:id/broadcast', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  try {
+    const result = await broadcastToGroup({ database: pool, tenantId: req.user.tenantId, groupId: req.params.id, title: req.body?.title, detail: req.body?.detail });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent_group.broadcast', detail: `Sent “${String(req.body?.title || '').trim()}” to ${result.delivered} agent(s).` });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The message could not be sent.';
     return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
   }
 });

@@ -71,6 +71,13 @@ export interface CustodyRecord {
   financeReviewNote?: string;
 }
 
+export interface AgentGroup {
+  id: string;
+  name: string;
+  createdAt: string;
+  members: { id: string; name: string }[];
+}
+
 export interface AppNotification {
   id: string;
   caseId?: string;

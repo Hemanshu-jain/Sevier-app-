@@ -19,7 +19,7 @@ import { caseStatusLabel } from './types';
 const reasonOptions: AttemptReason[] = ['Vehicle not found', 'Vehicle details mismatch', 'Unsafe situation', 'Customer dispute', 'Authority issue', 'Other'];
 const agentChecklist = ['Battery', 'Spare tyre', 'Fuel level', 'Matting', 'Keys and key number', 'Meter / odometer', 'Existing damages', 'Self motor', 'Wiper / motor', 'Stereo / infotainment', 'Ignition coil', 'Speakers', 'Side mirrors', 'Tyre condition'];
 const inspectionOptions = ['', 'Present / working', 'Missing', 'Damaged', 'Not applicable'];
-const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], notifications: [], releasePasses: [] };
+const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], groups: [], notifications: [], releasePasses: [] };
 
 type FieldView = 'home' | 'notifications' | 'sync';
 type FieldStep = 'work' | 'verify' | 'evidence' | 'custody';

@@ -1,4 +1,4 @@
-import type { Agent, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import { apiUrl } from './api-origin.ts';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent';
@@ -31,6 +31,7 @@ export interface Workspace {
   cases: RecoveryCase[];
   custody: CustodyRecord[];
   agents: Agent[];
+  groups: AgentGroup[];
   notifications: AppNotification[];
   releasePasses: ReleasePass[];
 }
@@ -130,6 +131,10 @@ export const api = {
   setAgentActive: (token: string, agentId: string, active: boolean) => request<{ agent: Agent }>(`/api/agents/${agentId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
   agentDirectory: (token: string, q: string) => request<{ agents: DirectoryAgent[] }>(`/api/agents/directory?q=${encodeURIComponent(q)}`, {}, token),
   linkAgent: (token: string, agentId: string) => request<{ agent: Agent }>(`/api/agents/${agentId}/link`, { method: 'POST' }, token),
+  createGroup: (token: string, values: { name: string; agentIds: string[] }) => request<{ group: AgentGroup }>('/api/agent-groups', { method: 'POST', body: JSON.stringify(values) }, token),
+  updateGroup: (token: string, groupId: string, values: { name?: string; agentIds?: string[] }) => request<{ groups: AgentGroup[] }>(`/api/agent-groups/${groupId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
+  deleteGroup: (token: string, groupId: string) => request<void>(`/api/agent-groups/${groupId}`, { method: 'DELETE' }, token),
+  broadcastGroup: (token: string, groupId: string, values: { title: string; detail: string }) => request<{ delivered: number }>(`/api/agent-groups/${groupId}/broadcast`, { method: 'POST', body: JSON.stringify(values) }, token),
   createAccount: (token: string, values: AccountInput) => request<{ case: RecoveryCase }>('/api/accounts', { method: 'POST', body: JSON.stringify(values) }, token),
   updateAccount: (token: string, caseId: string, values: AccountInput) => request<{ case: RecoveryCase }>(`/api/accounts/${caseId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
   auditEvents: (token: string) => request<{ events: AuditEvent[] }>('/api/audit-events', {}, token),
