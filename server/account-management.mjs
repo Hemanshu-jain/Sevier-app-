@@ -27,7 +27,7 @@ export async function createAccount({ database, tenantId, values, id = `RC-${new
   await query(database,
     `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, payment_cleared)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, 0)`,
-    [id, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise / 100, row.overdueDays, now]);
+    [id, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, now]);
   return { id, accountNumber: row.accountNumber, registration: row.registration };
 }
 
@@ -40,6 +40,6 @@ export async function updateAccount({ database, tenantId, caseId, values, now = 
   await rejectDuplicate(database, tenantId, row, caseId);
   await query(database,
     `UPDATE recovery_cases SET account_number = ?, borrower_name = ?, borrower_mobile = ?, borrower_address = ?, registration = ?, make_model = ?, chassis = ?, vehicle_type = ?, branch = ?, pending_amount = ?, overdue_days = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`,
-    [row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise / 100, row.overdueDays, now, caseId, tenantId]);
+    [row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, now, caseId, tenantId]);
   return { id: caseId, accountNumber: row.accountNumber, registration: row.registration };
 }

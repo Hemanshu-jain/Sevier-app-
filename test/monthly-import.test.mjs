@@ -27,7 +27,7 @@ test('re-import updates the open case while preserving both monthly snapshots', 
 
     assert.deepEqual({ accepted: first.accepted, created: first.created, updated: first.updated, duplicate: first.duplicate }, { accepted: 1, created: 1, updated: 0, duplicate: false });
     assert.deepEqual({ accepted: second.accepted, created: second.created, updated: second.updated, duplicate: second.duplicate }, { accepted: 1, created: 0, updated: 1, duplicate: false });
-    assert.equal((await query(pool, 'SELECT pending_amount FROM recovery_cases WHERE tenant_id = ? AND account_number = ?', [tenantId, 'LN-1001']))[0].pending_amount, 2250.5);
+    assert.equal((await query(pool, 'SELECT pending_amount FROM recovery_cases WHERE tenant_id = ? AND account_number = ?', [tenantId, 'LN-1001']))[0].pending_amount, 225050);
     const snaps = (await query(pool, 'SELECT pending_amount_paise FROM monthly_account_snapshots WHERE tenant_id = ? ORDER BY created_at, id', [tenantId])).map((r) => r.pending_amount_paise).sort((a, b) => a - b);
     assert.deepEqual(snaps, [100000, 225050]);
   } finally {
@@ -62,7 +62,7 @@ test('re-import keeps approved borrower and vehicle identity immutable', { skip 
     const row = (await query(pool, 'SELECT borrower_name, registration, pending_amount, overdue_days FROM recovery_cases WHERE tenant_id = ?', [tenantId]))[0];
     assert.equal(row.borrower_name, 'Meera Iyer');
     assert.equal(row.registration, 'KA 01 MQ 4281');
-    assert.equal(row.pending_amount, 1500);
+    assert.equal(row.pending_amount, 150000);
     assert.equal(row.overdue_days, 60);
   } finally {
     await pool.end();

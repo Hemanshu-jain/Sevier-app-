@@ -85,7 +85,7 @@ function mapCase(row) {
     borrower: { name: row.borrower_name, mobile: row.borrower_mobile, address: row.borrower_address },
     vehicle: { registration: row.registration, makeModel: row.make_model, chassis: row.chassis, type: row.vehicle_type },
     branch: row.branch,
-    pendingAmount: row.pending_amount,
+    pendingAmount: row.pending_amount / 100, // paise → rupees for display
     overdueDays: row.overdue_days,
     status: row.status,
     assignedAgentId: row.assigned_agent_user_id ?? undefined,
@@ -297,6 +297,7 @@ app.get('/api/reports/cases.csv', auth, requirePermission(PERMISSIONS.REPORT_EXP
   const rows = await query(pool, `SELECT recovery_cases.*, users.name AS agent_name
     FROM recovery_cases LEFT JOIN users ON users.id = recovery_cases.assigned_agent_user_id
     WHERE recovery_cases.tenant_id = ? ORDER BY recovery_cases.updated_at DESC`, [req.user.tenantId]);
+  for (const row of rows) row.pending_amount = row.pending_amount / 100; // paise → rupees for the export
   await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'report.exported', detail: `Exported ${rows.length} tenant recovery cases.` });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="recovery-cases-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -388,6 +389,18 @@ app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSION
   await addAudit(pool, { tenantId: req.user.tenantId, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'authority.approved', detail: `Authority document ${req.file.originalname} approved for assignment.` });
   await addNotification(pool, { tenantId: req.user.tenantId, caseId: req.recoveryCase.id, title: 'Recovery authority approved', detail: `${req.recoveryCase.id} is ready to assign.`, tone: 'green' });
   return res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?', [req.recoveryCase.id, req.user.tenantId])) });
+});
+
+app.post('/api/cases/:id/authority-revocation', auth, requirePermission(PERMISSIONS.AUTHORITY_APPROVE), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  if (caseRow.status !== 'imported' || !caseRow.authority_approved_at) return res.status(422).json({ error: 'Only an approved, unassigned case can have its authority revoked.' });
+  const updatedAt = isoNow();
+  await tx(pool, async (conn) => {
+    await query(conn, 'UPDATE recovery_cases SET authority_document_file_name = NULL, authority_document_original_name = NULL, authority_document_mime_type = NULL, authority_document_byte_size = NULL, authority_document_sha256 = NULL, authority_approved_at = NULL, authority_approved_by_user_id = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?', [updatedAt, caseRow.id, req.user.tenantId]);
+    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'authority.revoked', detail: 'Recovery authority revoked to allow account correction.' });
+  });
+  res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
 });
 
 app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
@@ -526,6 +539,23 @@ app.post('/api/cases/:id/custody-review', auth, requirePermission(PERMISSIONS.CU
     await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Custody report approved', detail: `${caseRow.id} can proceed to payment confirmation.`, tone: 'green' });
   });
   return res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?', [caseRow.id, req.user.tenantId])) });
+});
+
+app.post('/api/cases/:id/custody-changes', auth, requirePermission(PERMISSIONS.CUSTODY_REVIEW), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  if (caseRow.status !== 'custody_review') return res.status(422).json({ error: 'Only a submitted custody report can be sent back for changes.' });
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(422).json({ error: 'Explain what the agent needs to change.' });
+  const updatedAt = isoNow();
+  await tx(pool, async (conn) => {
+    // Custody rows are not immutable; clearing it lets the agent resubmit. Evidence rows stay.
+    await query(conn, 'DELETE FROM custody_records WHERE case_id = ? AND tenant_id = ?', [caseRow.id, req.user.tenantId]);
+    await query(conn, "UPDATE recovery_cases SET status = 'assigned', custody_id = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?", [updatedAt, caseRow.id, req.user.tenantId]);
+    await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: caseRow.assigned_agent_user_id, caseId: caseRow.id, title: 'Custody report needs changes', detail: `${caseRow.id}: ${note}`, tone: 'amber' });
+    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.changes_requested', detail: note });
+  });
+  res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
 });
 
 app.post('/api/cases/:id/payment-confirmation', auth, requirePermission(PERMISSIONS.PAYMENT_CONFIRM), async (req, res) => {

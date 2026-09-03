@@ -303,6 +303,29 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to approve the custody report.'); }
   }
 
+  async function requestCustodyChanges(note: string) {
+    if (!selectedCase) return;
+    try {
+      setActionError('');
+      setActionNotice('');
+      await api.requestCustodyChanges(session.token, selectedCase.id, note);
+      await loadWorkspace();
+      setDialog(null);
+      setActionNotice('Sent back to the agent for changes.');
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to request changes.'); }
+  }
+
+  async function revokeAuthority() {
+    if (!selectedCase) return;
+    try {
+      setActionError('');
+      setActionNotice('');
+      await api.revokeAuthority(session.token, selectedCase.id);
+      await loadWorkspace();
+      setActionNotice('Authority revoked. The account can be edited now.');
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to revoke authority.'); }
+  }
+
   async function clearPayment(reference: string) {
     if (!selectedCase) return;
     try {
@@ -378,14 +401,14 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
         <section className="content-area">{actionError && <div className="app-error" role="alert">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice" role="status">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading" role="status">Loading your tenant workspace…</div> : pageContent[page]}</section>
       </main>
 
-      {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} />}
+      {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} onRevokeAuthority={revokeAuthority} />}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
       {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
       {dialog === 'member' && <MemberDialog session={session} onClose={() => setDialog(null)} onSubmit={createMember} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
-      {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} />}
+      {dialog === 'custody-review' && selectedCase && <CustodyReviewDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={approveCustody} onRequestChanges={requestCustodyChanges} />}
       {dialog === 'payment' && selectedCase && <PaymentDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={clearPayment} />}
       {dialog === 'release' && selectedCase && <ReleaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={issueReleasePass} />}
       {dialog === 'close' && selectedCase && <CloseCaseDialog caseItem={selectedCase} onClose={() => setDialog(null)} onConfirm={closeCase} />}
@@ -471,7 +494,7 @@ function SettingsPage({ members, loading, session, onAdd, onChangeStatus }: { me
   return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage finance-team access and review the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>{canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace('_', ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}<section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
 }
 
-function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void }) {
+function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint, onRevokeAuthority }: { caseItem: RecoveryCase; agentList: Agent[]; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void; onRevokeAuthority: () => void }) {
   const assignedName = agentName(agentList, caseItem.assignedAgentId);
   const actionButton = () => {
     const action = financeCaseAction({ status: caseItem.status, hasAuthority: Boolean(caseItem.authority), hasCustody: Boolean(custody), hasReleasePass: Boolean(releasePass) }, session.user.permissions);
@@ -489,7 +512,7 @@ function CaseDrawer({ caseItem, agentList, custody, evidence, evidenceLoading, r
   return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer" role="dialog" aria-modal="true" aria-labelledby="case-drawer-title"><div className="drawer-top"><div><p className="eyebrow">{caseItem.id}</p><h2 id="case-drawer-title">{caseItem.borrower.name}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label="Close case details"><X size={18} /></button></div><StatusPill status={caseItem.status} />
     <div className="drawer-section"><p className="section-label">Borrower</p><div className="detail-list"><span><UsersRound size={14} /> {caseItem.borrower.mobile}</span><span><MapPin size={14} /> {caseItem.borrower.address}</span></div></div>
     <div className="drawer-section"><p className="section-label">Vehicle and loan</p><div className="vehicle-card"><span>{caseItem.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><strong>{caseItem.vehicle.registration}</strong><p>{caseItem.vehicle.makeModel}</p></div></div><dl className="detail-grid"><div><dt>Pending amount</dt><dd>{formatCurrency(caseItem.pendingAmount)}</dd></div><div><dt>Overdue</dt><dd>{caseItem.overdueDays} days</dd></div><div><dt>Loan account</dt><dd>{caseItem.accountNumber}</dd></div><div><dt>Chassis</dt><dd>{caseItem.vehicle.chassis}</dd></div></dl>{session.user.permissions.includes('account.manage') && caseItem.status === 'imported' && !caseItem.authority && <button className="text-button edit-account" onClick={() => onOpenDialog('edit-account')}>Edit account before approval <ChevronRight size={14} /></button>}</div>
-    <div className="drawer-section"><p className="section-label">Recovery authority</p>{caseItem.authority ? <div className="payment-detail"><ShieldCheck size={16} /><div><strong>Approved by finance</strong><span>{caseItem.authority.documentName}</span><small>{new Date(caseItem.authority.approvedAt).toLocaleString()}</small></div></div> : <div className="evidence-empty">No authority document approved yet.</div>}</div>
+    <div className="drawer-section"><p className="section-label">Recovery authority</p>{caseItem.authority ? <div className="payment-detail"><ShieldCheck size={16} /><div><strong>Approved by finance</strong><span>{caseItem.authority.documentName}</span><small>{new Date(caseItem.authority.approvedAt).toLocaleString()}</small></div></div> : <div className="evidence-empty">No authority document approved yet.</div>}{caseItem.authority && caseItem.status === 'imported' && session.user.permissions.includes('authority.approve') && <button className="text-button" onClick={onRevokeAuthority}>Revoke authority to edit account <ChevronRight size={14} /></button>}</div>
     <div className="drawer-section"><p className="section-label">Assignment</p><div className="assignment-detail"><span className="agent-avatar small">{assignedName.split(' ').map((word) => word[0]).join('')}</span><div><strong>{assignedName}</strong><small>{caseItem.assignedAt ? new Date(caseItem.assignedAt).toLocaleString() : 'Waiting for finance assignment'}</small></div></div></div>
     {caseItem.failure && <div className="failure-note"><span>!</span><div><strong>{caseItem.failure.reason}</strong><p>{caseItem.failure.note}</p><small>{caseItem.failure.recordedAt}</small></div></div>}
     {(evidenceLoading || evidence.length > 0) && <EvidencePanel evidence={evidence} loading={evidenceLoading} token={session.token} />}
@@ -560,8 +583,9 @@ function AuthorityDialog({ caseItem, onClose, onSubmit }: { caseItem: RecoveryCa
   return <Modal title="Approve recovery authority" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Verify the financer’s signed recovery authority before this case can be sent to an external seizure agent.</p><div className="case-reference"><strong>{caseItem.id}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="field-label">Signed authority document<input name="document" type="file" accept="application/pdf,image/jpeg,image/png" required /></label><label className="check-line"><input required type="checkbox" /> I verified that this document authorises recovery of the vehicle shown above.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><ShieldCheck size={15} /> Approve authority</button></div></form></Modal>;
 }
 
-function CustodyReviewDialog({ caseItem, onClose, onConfirm }: { caseItem: RecoveryCase; onClose: () => void; onConfirm: (note: string) => void }) {
-  return <Modal title="Review custody report" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(String(new FormData(event.currentTarget).get('note') || '')); }}><p className="modal-copy">Check the agent evidence, GPS, vehicle-condition slip, and parking details before allowing payment clearance.</p><div className="case-reference"><strong>{caseItem.id}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="field-label">Finance review note<textarea name="note" placeholder="Optional factual review note" /></label><label className="check-line"><input required type="checkbox" /> I reviewed the submitted custody record and evidence.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><PackageCheck size={15} /> Approve custody</button></div></form></Modal>;
+function CustodyReviewDialog({ caseItem, onClose, onConfirm, onRequestChanges }: { caseItem: RecoveryCase; onClose: () => void; onConfirm: (note: string) => void; onRequestChanges: (note: string) => void }) {
+  const [note, setNote] = useState('');
+  return <Modal title="Review custody report" onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(note.trim()); }}><p className="modal-copy">Check the agent evidence, GPS, vehicle-condition slip, and parking details before approving or requesting changes.</p><div className="case-reference"><strong>{caseItem.id}</strong><span>{caseItem.vehicle.registration} · {caseItem.borrower.name}</span></div><label className="field-label">Finance review note<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Required to request changes; optional when approving" /></label><label className="check-line"><input required type="checkbox" /> I reviewed the submitted custody record and evidence.</label><div className="modal-actions"><button className="secondary-button" type="button" disabled={!note.trim()} title={note.trim() ? '' : 'Add a note explaining the required changes'} onClick={() => onRequestChanges(note.trim())}>Request changes</button><button className="primary-button" type="submit"><PackageCheck size={15} /> Approve custody</button></div></form></Modal>;
 }
 
 function PaymentDialog({ caseItem, onClose, onConfirm }: { caseItem: RecoveryCase; onClose: () => void; onConfirm: (reference: string) => void }) {

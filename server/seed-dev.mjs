@@ -46,7 +46,7 @@ export async function seedDevData(pool) {
         `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, assigned_agent_user_id, assigned_at, updated_at, custody_id, payment_cleared,
            authority_document_original_name, authority_approved_at, authority_approved_by_user_id)
          VALUES (?, 'tenant-aarya', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-        [id, account, borrower, mobile, address, reg, makeModel, chassis, type, branch, pending, overdue, status, agent, agent ? now : null, now, custodyId,
+        [id, account, borrower, mobile, address, reg, makeModel, chassis, type, branch, pending * 100, overdue, status, agent, agent ? now : null, now, custodyId,
          hasAuthority ? 'Legacy authority record' : null, hasAuthority ? now : null, hasAuthority ? 'user-admin' : null]);
     }
     for (const [id, caseId, yard, arrival, rate, createdAt, agentName, checklist, reviewedAt] of custody) {
