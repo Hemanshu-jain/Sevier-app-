@@ -676,13 +676,49 @@ function EvidencePanel({ evidence, loading, token }: { evidence: EvidenceRecord[
   return <div className="drawer-section"><p className="section-label">Agent evidence</p>{loading ? <div className="evidence-empty">Loading secured evidence…</div> : <><div className="evidence-meta"><Camera size={16} /><span>{evidence.length} file{evidence.length === 1 ? '' : 's'} captured in the field</span></div>{evidence.map((item) => <button className="evidence-row" key={item.id} onClick={() => openEvidence(item)}><Camera size={15} /><span><strong>{item.originalName}</strong><small>{item.agentName ?? 'Assigned agent'} · {new Date(item.capturedAt).toLocaleString()}{item.latitude !== null && item.longitude !== null ? ` · GPS ${item.latitude.toFixed(4)}, ${item.longitude.toFixed(4)}` : ''}</small></span><ChevronRight size={15} /></button>)}</>}{selected && <div className="evidence-viewer"><div><strong>{selected.originalName}</strong><button onClick={() => { if (fileUrl) URL.revokeObjectURL(fileUrl); setFileUrl(null); setSelected(null); }}><X size={15} /></button></div>{error ? <p>{error}</p> : fileUrl ? selected.mimeType.startsWith('video/') ? <video src={fileUrl} controls /> : <img src={fileUrl} alt={`Evidence for ${selected.caseId}`} /> : <p>Loading evidence…</p>}</div>}</div>;
 }
 
+const RELEASE_PASS_VALID_DAYS = 90; // mirrors server RELEASE_TTL_MS
+
 function PrintableReleasePass({ pass, caseItem, custody, tenantName }: { pass: ReleasePass; caseItem?: RecoveryCase; custody?: CustodyRecord; tenantName: string }) {
   const [qr, setQr] = useState('');
+  const verifyUrl = pass.signedToken ? `${window.location.origin}/r/${pass.signedToken}` : '';
   useEffect(() => {
-    if (!pass.signedToken) { setQr(''); return; }
-    QRCode.toDataURL(`${window.location.origin}/r/${pass.signedToken}`, { margin: 1, width: 220 }).then(setQr).catch(() => setQr(''));
-  }, [pass.signedToken]);
-  return <section className="print-release-pass"><header><div><p>VEHICLE RELEASE AUTHORISATION</p><h1>{tenantName}</h1></div><strong>{pass.id}</strong></header><div className="print-release-state"><Check size={19} /> All recorded dues have been cleared by the finance company.</div><section className="print-release-grid"><div><span>Customer</span><strong>{pass.borrowerName}</strong><small>{pass.borrowerMobile}</small></div><div><span>Vehicle</span><strong>{pass.vehicleRegistration}</strong><small>{pass.vehicleModel}</small></div><div><span>Work order</span><strong>{pass.caseId}</strong><small>Payment ref: {pass.paymentReference ?? 'Recorded by finance'}</small></div><div><span>Custody location</span><strong>{custody?.yardName ?? 'As recorded by parking yard'}</strong><small>Certificate: {pass.custodyId ?? 'Not available'}</small></div></section><section className="print-verification"><div><span>ONE-TIME RELEASE TOKEN</span><strong>{pass.verificationCode}</strong><small>Issue date: {new Date(pass.issuedAt).toLocaleString()}</small></div>{qr ? <img className="print-qr" src={qr} alt="Scan to verify this release pass" width={112} height={112} /> : <div className="print-code" aria-label="Manual verification code">{pass.verificationCode.slice(0, 5)}<br />{pass.verificationCode.slice(5)}</div>}</section><p className="print-note">Present this pass and an approved identity document at the recorded parking location. The finance company must verify the release token before the vehicle is handed over.</p><footer><span>Customer signature: ____________________</span><span>Authorised finance signatory: ____________________</span></footer>{caseItem && <small className="print-footer">Vehicle registration: {caseItem.vehicle.registration} · This document is a finance-issued release record.</small>}</section>;
+    if (!verifyUrl) { setQr(''); return; }
+    QRCode.toDataURL(verifyUrl, { margin: 1, width: 240 }).then(setQr).catch(() => setQr(''));
+  }, [verifyUrl]);
+  const issued = new Date(pass.issuedAt);
+  const validUntil = new Date(issued.getTime() + RELEASE_PASS_VALID_DAYS * 86_400_000);
+  const fmtDate = (date: Date) => date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return <section className="print-release-pass">
+    <header className="pass-letterhead">
+      <div className="pass-brand"><span className="pass-mark"><i /><i /><i /></span><div><strong>{tenantName || 'Finance company'}</strong><span>Vehicle recovery &amp; release authority</span></div></div>
+      <div className="pass-meta"><span>Release pass</span><strong>{pass.id}</strong></div>
+    </header>
+    <div className="pass-title-block"><h1>Vehicle Release Authorisation</h1><p>Authorises release of the vehicle below from finance custody. Valid only with the verification token and an approved identity document.</p></div>
+    <div className="pass-status"><Check size={16} /> All recorded dues have been cleared by the finance company.</div>
+    <div className="pass-body">
+      <table className="pass-table"><tbody>
+        <tr><th>Customer</th><td>{pass.borrowerName}<small>{pass.borrowerMobile}</small></td></tr>
+        <tr><th>Vehicle</th><td>{pass.vehicleRegistration}<small>{pass.vehicleModel}{caseItem?.vehicle.chassis ? ` · Chassis ${caseItem.vehicle.chassis.slice(-8)}` : ''}</small></td></tr>
+        <tr><th>Loan / work order</th><td>{caseItem?.accountNumber ?? pass.caseId}<small>Case {pass.caseId}</small></td></tr>
+        <tr><th>Custody location</th><td>{custody?.yardName ?? 'Recorded parking yard'}<small>Certificate {pass.custodyId ?? '—'}</small></td></tr>
+        <tr><th>Payment reference</th><td>{pass.paymentReference ?? 'Recorded by finance'}<small>Confirmed by finance</small></td></tr>
+        <tr><th>Issued</th><td>{fmtDate(issued)}<small>Valid until {fmtDate(validUntil)}</small></td></tr>
+        {pass.issuedByName && <tr><th>Issued by</th><td>{pass.issuedByName}</td></tr>}
+      </tbody></table>
+      <aside className="pass-verify">
+        {qr ? <img src={qr} alt="Scan to verify this release pass" width={150} height={150} /> : <div className="pass-qr-fallback"><ShieldCheck size={26} /></div>}
+        <p className="pass-scan">Scan to verify authenticity</p>
+        <div className="pass-token"><span>Verification token</span><strong>{pass.verificationCode}</strong></div>
+      </aside>
+    </div>
+    <ol className="pass-conditions">
+      <li>Present this pass with the customer’s approved identity document at the recorded custody location.</li>
+      <li>The finance company must confirm the verification token before the vehicle is handed over.</li>
+      <li>This authorisation is void if altered, or after the validity date shown above.</li>
+    </ol>
+    <div className="pass-signatures"><div><span className="pass-sign-line" />Customer signature</div><div><span className="pass-sign-line" />Authorised finance signatory</div></div>
+    <footer className="pass-authenticity"><ShieldCheck size={13} /><span>Finance-issued release record · Pass {pass.id}{verifyUrl ? ` · Verify at ${verifyUrl}` : ''}</span></footer>
+  </section>;
 }
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
