@@ -63,6 +63,15 @@ export interface AccountInput {
   overdueDays: string;
 }
 
+export interface DirectoryAgent {
+  id: string;
+  name: string;
+  mobile: string;
+  city: string | null;
+  createdVia: string;
+  linked: boolean;
+}
+
 const sessionKey = 'handoff-session';
 
 export class ApiError extends Error {
@@ -119,6 +128,8 @@ export const api = {
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),
   createAgent: (token: string, values: { name: string; mobile: string; city: string }) => request<{ agent: Agent }>('/api/agents', { method: 'POST', body: JSON.stringify(values) }, token),
   setAgentActive: (token: string, agentId: string, active: boolean) => request<{ agent: Agent }>(`/api/agents/${agentId}/status`, { method: 'PUT', body: JSON.stringify({ active }) }, token),
+  agentDirectory: (token: string, q: string) => request<{ agents: DirectoryAgent[] }>(`/api/agents/directory?q=${encodeURIComponent(q)}`, {}, token),
+  linkAgent: (token: string, agentId: string) => request<{ agent: Agent }>(`/api/agents/${agentId}/link`, { method: 'POST' }, token),
   createAccount: (token: string, values: AccountInput) => request<{ case: RecoveryCase }>('/api/accounts', { method: 'POST', body: JSON.stringify(values) }, token),
   updateAccount: (token: string, caseId: string, values: AccountInput) => request<{ case: RecoveryCase }>(`/api/accounts/${caseId}`, { method: 'PUT', body: JSON.stringify(values) }, token),
   auditEvents: (token: string) => request<{ events: AuditEvent[] }>('/api/audit-events', {}, token),

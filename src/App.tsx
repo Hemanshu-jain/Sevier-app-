@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from './api';
-import type { AccountInput, Session } from './api';
+import type { AccountInput, DirectoryAgent, Session } from './api';
 import type { Agent, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import QRCode from 'qrcode';
 import { caseStatusLabel } from './types';
@@ -416,7 +416,7 @@ function App({ session, onLogout }: { session: Session; onLogout: () => void }) 
       {selectedCase && <CaseDrawer caseItem={selectedCase} agentList={agentList} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} onRevokeAuthority={revokeAuthority} onRevokeRelease={revokeReleasePass} />}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
-      {dialog === 'agent' && <AgentDialog onClose={() => setDialog(null)} onSubmit={createAgent} />}
+      {dialog === 'agent' && <AgentDialog session={session} onClose={() => setDialog(null)} onSubmit={createAgent} onLinked={loadWorkspace} />}
       {dialog === 'member' && <MemberDialog session={session} onClose={() => setDialog(null)} onSubmit={createMember} />}
       {dialog === 'authority' && selectedCase && <AuthorityDialog caseItem={selectedCase} onClose={() => setDialog(null)} onSubmit={approveAuthority} />}
       {dialog === 'assign' && selectedCase && <AssignDialog caseItem={selectedCase} agentList={agentList} onClose={() => setDialog(null)} onSubmit={assignCase} />}
@@ -584,8 +584,37 @@ function AccountDialog({ caseItem, onClose, onSubmit }: { caseItem?: RecoveryCas
   return <Modal title={caseItem ? 'Edit imported account' : 'Add account manually'} onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">{caseItem ? 'Correct the borrower, vehicle, or loan details before approving recovery authority.' : 'Use this for a single reviewed exception instead of uploading a monthly file.'}</p><div className="form-two-col"><label className="field-label">Loan account<input name="accountNumber" required defaultValue={caseItem?.accountNumber} /></label><label className="field-label">Customer name<input name="borrowerName" required defaultValue={caseItem?.borrower.name} /></label><label className="field-label">Mobile number<input name="borrowerMobile" type="tel" required defaultValue={caseItem?.borrower.mobile} /></label><label className="field-label">Branch<input name="branch" required defaultValue={caseItem?.branch} /></label></div><label className="field-label">Customer address<textarea name="borrowerAddress" required defaultValue={caseItem?.borrower.address} /></label><div className="form-two-col"><label className="field-label">Registration number<input name="registration" required defaultValue={caseItem?.vehicle.registration} /></label><label className="field-label">Make / model<input name="makeModel" required defaultValue={caseItem?.vehicle.makeModel} /></label><label className="field-label">Vehicle type<select name="vehicleType" required defaultValue={caseItem?.vehicle.type ?? ''}><option value="" disabled>Select type</option><option value="2-wheeler">2-wheeler</option><option value="4-wheeler">4-wheeler</option></select></label><label className="field-label">Chassis number<input name="chassis" defaultValue={caseItem?.vehicle.chassis} /></label><label className="field-label">Pending amount (₹)<input name="pendingAmount" type="number" min="0" step="0.01" required defaultValue={caseItem?.pendingAmount} /></label><label className="field-label">Overdue days<input name="overdueDays" type="number" min="0" step="1" required defaultValue={caseItem?.overdueDays} /></label></div><label className="check-line"><input required type="checkbox" /> I verified these details against the finance company’s current account record.</label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Check size={15} /> Save account</button></div></form></Modal>;
 }
 
-function AgentDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <Modal title="Add seizure agent" onClose={onClose}><form onSubmit={onSubmit}><p className="modal-copy">Register an independent field agent. This mobile number becomes their OTP sign-in identity for assigned work.</p><label className="field-label">Full name<input name="name" required minLength={2} maxLength={100} autoComplete="name" /></label><label className="field-label">Indian mobile number<input name="mobile" required type="tel" inputMode="tel" autoComplete="tel" placeholder="98765 43210" /></label><label className="field-label">Primary city<input name="city" required minLength={2} maxLength={100} autoComplete="address-level2" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><UsersRound size={15} /> Add agent</button></div></form></Modal>;
+function AgentDialog({ session, onClose, onSubmit, onLinked }: { session: Session; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onLinked: () => void }) {
+  const [mode, setMode] = useState<'explore' | 'create'>('explore');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<DirectoryAgent[]>([]);
+  const [busyId, setBusyId] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      api.agentDirectory(session.token, query).then(({ agents }) => { if (active) setResults(agents); }).catch(() => undefined);
+    }, 250);
+    return () => { active = false; clearTimeout(timer); };
+  }, [query, session.token]);
+
+  async function add(id: string) {
+    setBusyId(id);
+    try { await api.linkAgent(session.token, id); setResults((rows) => rows.map((row) => (row.id === id ? { ...row, linked: true } : row))); onLinked(); }
+    catch { /* row stays addable on failure */ }
+    finally { setBusyId(''); }
+  }
+
+  return <Modal title="Add seizure agent" onClose={onClose}>
+    <div className="mode-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={mode === 'explore'} className={mode === 'explore' ? 'active' : ''} onClick={() => setMode('explore')}>Explore directory</button>
+      <button type="button" role="tab" aria-selected={mode === 'create'} className={mode === 'create' ? 'active' : ''} onClick={() => setMode('create')}>Create new</button>
+    </div>
+    {mode === 'explore' ? <div>
+      <label className="field-label">Search agents<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, mobile, or city" autoFocus /></label>
+      <div className="directory-list">{results.length ? results.map((agent) => <div className="directory-row" key={agent.id}><div><strong>{agent.name}</strong><small>{agent.city} · {agent.mobile} · {agent.createdVia === 'self' ? 'Self-registered' : 'Finance-added'}</small></div>{agent.linked ? <span className="linked-badge"><Check size={13} /> In roster</span> : <button className="secondary-button" type="button" disabled={busyId === agent.id} onClick={() => add(agent.id)}>Add</button>}</div>) : <p className="field-hint">No matching agents. Try another search, or create a new one.</p>}</div>
+    </div> : <form onSubmit={onSubmit}><p className="modal-copy">Register a new independent field agent. This mobile number becomes their OTP sign-in identity.</p><label className="field-label">Full name<input name="name" required minLength={2} maxLength={100} autoComplete="name" /></label><label className="field-label">Indian mobile number<input name="mobile" required type="tel" inputMode="tel" autoComplete="tel" placeholder="98765 43210" /></label><label className="field-label">Primary city<input name="city" required minLength={2} maxLength={100} autoComplete="address-level2" /></label><div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><UsersRound size={15} /> Add agent</button></div></form>}
+  </Modal>;
 }
 
 function MemberDialog({ session, onClose, onSubmit }: { session: Session; onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

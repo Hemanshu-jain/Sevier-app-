@@ -16,7 +16,7 @@ import { hashSessionToken } from './session-token.mjs';
 import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
-import { createAgent, setAgentActive } from './agent-management.mjs';
+import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
 import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
@@ -273,7 +273,7 @@ app.get('/api/workspace', auth, async (req, res) => {
   const custodyRows = isAgent
     ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? AND case_id IN (?) ORDER BY created_at DESC', [req.user.tenantId, visibleCaseIds]) : [])
     : await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC', [req.user.tenantId]);
-  const agentRows = isAgent ? [] : await query(pool, "SELECT id, name, mobile, city, active FROM users WHERE tenant_id = ? AND role = 'agent' ORDER BY name", [req.user.tenantId]);
+  const agentRows = isAgent ? [] : await query(pool, "SELECT users.id, users.name, users.mobile, users.city, m.active FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? ORDER BY users.name", [req.user.tenantId]);
   // ponytail: month start in ISO; compares against updated_at (close time) as the "completed" proxy — a dedicated closed_at is the exact fix if it ever matters.
   const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
   const monthStartIso = monthStart.toISOString();
@@ -293,7 +293,7 @@ app.get('/api/workspace', auth, async (req, res) => {
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
   try {
-    const agent = await createAgent({ database: pool, tenantId: req.user.tenantId, values: req.body ?? {} });
+    const agent = await createAgent({ database: pool, tenantId: req.user.tenantId, values: req.body ?? {}, addedByUserId: req.user.id });
     await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent.created', detail: `${agent.name} was added as an independent field agent.` });
     return res.status(201).json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: 'Active' } });
   } catch (error) {
@@ -309,6 +309,22 @@ app.put('/api/agents/:id/status', auth, requirePermission(PERMISSIONS.AGENT_MANA
     return res.json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: agent.active ? 'Active' : 'Suspended' } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The agent status could not be changed.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.get('/api/agents/directory', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  const agents = await searchAgentDirectory({ database: pool, tenantId: req.user.tenantId, q: String(req.query?.q || '') });
+  res.json({ agents });
+});
+
+app.post('/api/agents/:id/link', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
+  try {
+    const agent = await linkAgent({ database: pool, tenantId: req.user.tenantId, agentId: req.params.id, addedByUserId: req.user.id });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'agent.linked', detail: `${agent.name} was added to the roster from the directory.` });
+    return res.status(201).json({ agent: { ...agent, activeCases: 0, completedThisMonth: 0, status: 'Active' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not add the agent.';
     return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
   }
 });
