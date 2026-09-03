@@ -159,3 +159,29 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .profile-form .modal-actions{justify-content:flex-start;margin-top:2px}
 .profile-form input:disabled{background:#f4f6f9;color:#7a8aa0;cursor:not-allowed}
 .text-button.danger{color:var(--red);display:inline-flex;align-items:center;gap:5px}
+/* Dashboard editorial hero + asymmetric bento (de-templatized) */
+.eyebrow.light{color:#8fb0e0}
+.dash-hero{display:grid;grid-template-columns:1.7fr .9fr;gap:2px;background:var(--navy);border-radius:16px;overflow:hidden;margin-bottom:20px;box-shadow:0 18px 42px rgba(16,44,81,.2)}
+.dash-hero-lead{padding:30px 32px;background:linear-gradient(135deg,#143560 0%,#0f2949 100%);color:#eaf2ff}
+.dash-hero-lead h1{font-size:31px;letter-spacing:-1.2px;margin:9px 0 0;color:#fff;font-weight:800}
+.dash-hero-sub{margin:9px 0 22px;color:#bacfec;font-size:13px;max-width:48ch;line-height:1.55}
+.dash-hero-actions{display:flex;gap:10px;flex-wrap:wrap}
+.hero-ghost{border:1px solid rgba(174,201,240,.34);background:rgba(255,255,255,.06);color:#dbe8fb;border-radius:6px;min-height:37px;padding:0 13px;font-size:11px;font-weight:800;display:inline-flex;align-items:center;gap:5px}
+.hero-ghost:hover{background:rgba(255,255,255,.13)}
+.dash-hero-stat{padding:30px 28px;background:#193f6e;color:#eaf2ff;display:flex;flex-direction:column;justify-content:center}
+.dash-hero-stat strong{font-size:54px;letter-spacing:-2.2px;line-height:1;margin:10px 0 7px;color:#fff;font-weight:800}
+.dash-hero-stat small{font-size:10px;color:#a9c2e4}
+.dash-bento{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;margin-bottom:20px}
+.bento-tile{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 19px;display:flex;flex-direction:column;text-align:left}
+.bento-tile .metric-icon{margin-bottom:14px}
+.bento-body p{margin:0;color:#7c8a9b;font-size:11px;font-weight:700}
+.bento-body strong{font-size:30px;letter-spacing:-1px;display:block;margin:3px 0 2px;color:var(--ink)}
+.bento-body small{font-size:10px;color:#97a2b0}
+.bento-tile.wide{flex-direction:row;align-items:center;gap:16px;background:linear-gradient(120deg,#fffaf1,#fff);border-color:#f0e2c6}
+.bento-tile.wide .metric-icon{margin-bottom:0}
+.bento-tile.wide .bento-body{flex:1}
+.bento-tile.wide .bento-body strong{font-size:38px}
+.bento-tile.wide .bento-go{color:#c99a3f;flex:none}
+.bento-tile.wide:hover{border-color:#e6c98a;box-shadow:0 8px 22px rgba(163,95,12,.11)}
+.page-heading h2{font-size:27px;letter-spacing:-1px}
+@media(max-width:1100px){.dash-hero{grid-template-columns:1fr}.dash-bento{grid-template-columns:1fr}}

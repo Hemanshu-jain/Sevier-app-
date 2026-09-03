@@ -385,7 +385,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
+    dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} monthLabel={monthLabel} greeting={greeting} userName={session.user.name} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
     register: <RegisterPage cases={visibleCases} monthLabel={monthLabel} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
     cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
@@ -439,18 +439,26 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   );
 }
 
-function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady, monthLabel, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; activeCases: RecoveryCase[]; pendingReview: RecoveryCase[]; releaseReady: number; monthLabel: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
+function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady, monthLabel, greeting, userName, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; activeCases: RecoveryCase[]; pendingReview: RecoveryCase[]; releaseReady: number; monthLabel: string; greeting: string; userName: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
   const pendingAmount = activeCases.reduce((sum, item) => sum + item.pendingAmount, 0);
   const inField = cases.filter((item) => item.status === 'assigned');
   const activeBranches = new Set(activeCases.map((item) => item.branch)).size;
   const pipeline = recoveryPipeline(cases);
+  const firstName = userName.split(' ')[0];
   return <>
-    <div className="page-heading"><div><p className="eyebrow">Finance operations</p><h2>Recovery overview</h2></div><span className="date-control">{monthLabel}</span></div>
-    <section className="metric-grid">
-      <MetricCard icon={<ClipboardCheck size={19} />} label="Open recovery cases" value={activeCases.length.toString()} foot={`Across ${activeBranches} active branch${activeBranches === 1 ? '' : 'es'}`} tone="blue" />
-      <MetricCard icon={<Clock3 size={19} />} label="Need finance review" value={pendingReview.length.toString()} foot="Imports and failed attempts" tone="amber" />
-      <MetricCard icon={<Gauge size={19} />} label="Pending value" value={formatCurrency(pendingAmount)} foot="Across active recovery cases" tone="violet" />
-      <MetricCard icon={<FileCheck2 size={19} />} label="Ready for release" value={releaseReady.toString()} foot="Payment confirmed by finance" tone="green" />
+    <section className="dash-hero">
+      <div className="dash-hero-lead">
+        <p className="eyebrow light">Finance operations · {monthLabel}</p>
+        <h1>{greeting}, {firstName}.</h1>
+        <p className="dash-hero-sub">{formatCurrency(pendingAmount)} pending across {activeCases.length} open {activeCases.length === 1 ? 'case' : 'cases'} in {activeBranches} branch{activeBranches === 1 ? '' : 'es'}.</p>
+        <div className="dash-hero-actions"><button className="primary-button" onClick={() => onPageChange('register')}><Plus size={15} /> Import monthly file</button><button className="hero-ghost" onClick={() => onPageChange('cases')}>View all cases <ChevronRight size={15} /></button></div>
+      </div>
+      <div className="dash-hero-stat"><span className="eyebrow light">Open recovery cases</span><strong>{activeCases.length}</strong><small>Live across {activeBranches} branch{activeBranches === 1 ? '' : 'es'}</small></div>
+    </section>
+    <section className="dash-bento">
+      <button className="bento-tile wide amber" onClick={() => onPageChange('register')}><span className="metric-icon amber"><Clock3 size={20} /></span><div className="bento-body"><p>Need finance review</p><strong>{pendingReview.length}</strong><small>Imports and failed attempts waiting on you</small></div><ChevronRight className="bento-go" size={18} /></button>
+      <div className="bento-tile"><span className="metric-icon blue"><ClipboardCheck size={18} /></span><div className="bento-body"><p>In field now</p><strong>{inField.length}</strong><small>Assigned to agents</small></div></div>
+      <div className="bento-tile"><span className="metric-icon green"><FileCheck2 size={18} /></span><div className="bento-body"><p>Ready for release</p><strong>{releaseReady}</strong><small>Payment confirmed</small></div></div>
     </section>
     <section className="workflow-strip"><div><p className="eyebrow">Controlled operating flow</p><h3>Live cases at each recorded lifecycle stage.</h3></div><ol>{pipeline.map((stage) => <li className={stage.count ? 'current' : ''} key={stage.label}><span>{stage.count}</span>{stage.label}</li>)}</ol></section>
     <section className="dashboard-columns">

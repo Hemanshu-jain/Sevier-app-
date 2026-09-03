@@ -54,3 +54,60 @@
 .field-form-error{margin:0;color:#c0413d;font-size:11px;font-weight:700}
 .field-signout{margin-top:16px;color:#c0413d;border-color:#f0cecb}
 .field-signout:hover{background:#fff4f3}
+/* M5/M2: larger, more accessible field typography and controls for the final field build.
+   Field text was 8-11px (too small on a phone); this raises the readable floor by ~+4
+   and enlarges primary controls/touch targets. Sizes are px overrides layered over the base. */
+.field-home h1{font-size:26px}
+.field-greeting{font-size:13px}
+.field-copy{font-size:14px;line-height:1.55}
+.field-connection{font-size:12px}
+.field-summary.three span{font-size:12px}
+.field-summary strong{font-size:22px}
+.field-tabs button{font-size:13px}
+.field-screen-title h1{font-size:24px}
+.field-text-action{font-size:12px}
+.field-assignment p{font-size:12px}
+.field-assignment h2{font-size:17px}
+.field-assignment small{font-size:12px}
+.field-assignment section p{font-size:12px}
+.field-tag{font-size:10px}
+.field-list-row strong{font-size:14px}
+.field-list-row small{font-size:12px}
+.field-list-row em{font-size:11px}
+.field-empty{font-size:13px}
+.field-status span{font-size:10px}
+.field-status small{font-size:12px}
+.field-vehicle-head h1{font-size:19px}
+.field-vehicle-head p{font-size:12px}
+.field-label{font-size:10px}
+.field-person strong{font-size:16px}
+.field-person span{font-size:13px}
+.field-address{font-size:13px}
+.field-loan-grid small{font-size:11px}
+.field-loan-grid strong{font-size:12px}
+.field-quick-actions a{font-size:12px;min-height:48px}
+.field-instruction strong{font-size:12px}
+.field-instruction p{font-size:11px}
+.field-authority strong{font-size:13px}
+.field-authority p{font-size:11px}
+.field-step-heading span{font-size:10px}
+.field-step-heading h2{font-size:19px}
+.field-step-heading p{font-size:12px}
+.field-match{font-size:12px}
+.field-location{font-size:12px}
+.field-checklist-select label{font-size:12px}
+.field-checklist-select select{font-size:13px;height:40px}
+.field-text-label{font-size:12px}
+.field-text-label input,.field-text-label textarea{font-size:15px;padding:11px}
+.field-file-picker strong{font-size:15px}
+.field-file-picker span{font-size:11px}
+.field-file-list span{font-size:11px}
+.field-evidence-count strong{font-size:12px}
+.field-evidence-count small{font-size:10px}
+.field-confirm{font-size:12px}
+.field-primary,.field-secondary{font-size:14px;min-height:50px}
+.field-complete-card strong{font-size:13px}
+.field-complete-card p{font-size:11px}
+.field-settings-form input:disabled{font-size:15px}
+.field-notice,.field-offline{font-size:11px}
+.field-footer-note{font-size:11px}
