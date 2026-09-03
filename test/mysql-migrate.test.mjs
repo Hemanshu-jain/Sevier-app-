@@ -13,7 +13,7 @@ test('migrate builds the schema, is idempotent, and declares immutability trigge
 
     const [tables] = await pool.query('SELECT table_name AS t FROM information_schema.tables WHERE table_schema = DATABASE()');
     const names = new Set(tables.map((row) => row.t));
-    for (const expected of ['tenants', 'users', 'recovery_cases', 'custody_records', 'release_passes', 'field_mutation_receipts', 'audit_events', 'monthly_account_snapshots']) {
+    for (const expected of ['tenants', 'users', 'recovery_cases', 'custody_records', 'release_passes', 'field_mutation_receipts', 'audit_events', 'monthly_account_snapshots', 'agent_memberships', 'case_assignments', 'agent_groups', 'agent_group_members']) {
       assert.ok(names.has(expected), `missing table ${expected}`);
     }
 

@@ -55,6 +55,18 @@ export async function seedDevData(pool) {
          VALUES (?, 'tenant-aarya', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [id, caseId, yard, arrival, rate, createdAt, agentName, checklist, reviewedAt, reviewedAt ? 'user-manager' : null]);
     }
+    // Directory memberships for the seeded Aarya agents.
+    for (const agentId of ['agent-1', 'agent-2', 'agent-3']) {
+      await conn.query('INSERT INTO agent_memberships (agent_user_id, tenant_id, added_at, added_by_user_id) VALUES (?, ?, ?, ?)', [agentId, 'tenant-aarya', now, 'user-admin']);
+    }
+    // Two self-registered directory agents (global, no membership yet) so "explore" has results.
+    for (const [id, name, mobile, city] of [['dir-suresh', 'Suresh Naik', '+91 90080 33112', 'Hubballi'], ['dir-lakshmi', 'Lakshmi Devi', '+91 90080 33113', 'Belagavi']]) {
+      await conn.query("INSERT INTO users (id, tenant_id, role, name, email, password_hash, mobile, city, active, mobile_e164, onboarding_complete, created_via) VALUES (?, NULL, 'agent', ?, ?, 'otp-only', ?, ?, 1, ?, 1, 'self')", [id, name, `${id}@handoff.invalid`, mobile, city, normalizeIndiaMobile(mobile)]);
+    }
+    // Co-assignment rows mirroring the seeded single assignments (case row index 13 = agent).
+    for (const row of cases) {
+      if (row[13]) await conn.query('INSERT INTO case_assignments (tenant_id, case_id, agent_user_id, assigned_at, assigned_by_user_id, active) VALUES (?, ?, ?, ?, ?, 1)', ['tenant-aarya', row[0], row[13], now, 'user-admin']);
+    }
     await conn.query(
       `INSERT INTO notifications (id, tenant_id, recipient_user_id, case_id, title, detail, created_at, tone) VALUES
         ('n-1', 'tenant-aarya', NULL, 'RC-260774', 'Custody report submitted', 'RC-260774 was submitted by Ayesha Shaikh and is awaiting your review.', '2026-08-10T11:42:00.000Z', 'green'),
