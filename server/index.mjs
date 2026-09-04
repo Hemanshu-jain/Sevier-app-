@@ -713,20 +713,30 @@ app.post('/api/cases/:id/payment-confirmation', auth, requirePermission(PERMISSI
 app.post('/api/cases/:id/release-pass', auth, requirePermission(PERMISSIONS.RELEASE_ISSUE), async (req, res) => {
   const caseRow = await caseForUser(req.params.id, req.user);
   if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  // Idempotent: a case holds at most one pass (unique case_id). If one already exists — a
+  // re-issue, a double-click, or a concurrent request — return it instead of erroring.
+  const passByCase = () => queryOne(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? AND release_passes.case_id = ?', [req.user.tenantId, caseRow.id]);
+  const existingPass = await passByCase();
+  if (existingPass) return res.json({ case: mapCase(caseRow), releasePass: mapReleasePass(existingPass) });
   const actionError = validateCaseAction('issue_release', caseRow);
   if (actionError) return res.status(422).json({ error: actionError });
-  const existingPass = await queryOne(pool, 'SELECT * FROM release_passes WHERE tenant_id = ? AND case_id = ?', [req.user.tenantId, caseRow.id]);
-  if (existingPass) return res.json({ case: mapCase(caseRow), releasePass: mapReleasePass(existingPass) });
   const passId = `RP-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const verificationCode = crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
   const updatedAt = isoNow();
   const exp = new Date(Date.now() + RELEASE_TTL_MS).toISOString();
   const signedToken = releaseSigner.configured ? releaseSigner.sign({ passId, orgId: req.user.tenantId, issuedAt: updatedAt, exp, reg: String(caseRow.registration).slice(-4) }) : null;
-  await tx(pool, async (conn) => {
-    await persistReleasePass(conn, { id: passId, tenantId: req.user.tenantId, caseId: caseRow.id, issuedByUserId: req.user.id, verificationCode, issuedAt: updatedAt, borrowerName: caseRow.borrower_name, borrowerMobile: caseRow.borrower_mobile, vehicleRegistration: caseRow.registration, vehicleModel: caseRow.make_model, custodyId: caseRow.custody_id, paymentReference: caseRow.payment_reference, signedToken, keyId: releaseSigner.keyId });
-    await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Release pass issued', detail: `${passId} is ready to print for ${caseRow.borrower_name}.`, tone: 'green' });
-    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'release_pass.issued', detail: `Issued ${passId}.` });
-  });
+  try {
+    await tx(pool, async (conn) => {
+      await persistReleasePass(conn, { id: passId, tenantId: req.user.tenantId, caseId: caseRow.id, issuedByUserId: req.user.id, verificationCode, issuedAt: updatedAt, borrowerName: caseRow.borrower_name, borrowerMobile: caseRow.borrower_mobile, vehicleRegistration: caseRow.registration, vehicleModel: caseRow.make_model, custodyId: caseRow.custody_id, paymentReference: caseRow.payment_reference, signedToken, keyId: releaseSigner.keyId });
+      await addNotification(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, title: 'Release pass issued', detail: `${passId} is ready to print for ${caseRow.borrower_name}.`, tone: 'green' });
+      await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'release_pass.issued', detail: `Issued ${passId}.` });
+    });
+  } catch (error) {
+    // Lost a concurrent race on the unique(case_id) constraint — return the winner's pass.
+    const raced = await passByCase();
+    if (raced) return res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), releasePass: mapReleasePass(raced) });
+    throw error;
+  }
   const updatedCase = await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id]);
   const releasePass = await queryOne(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.id = ?', [passId]);
   res.json({ case: mapCase(updatedCase), releasePass: mapReleasePass(releasePass) });
