@@ -416,7 +416,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
           <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' ? `${greeting}, ${session.user.name.split(' ')[0]}` : visibleNavigation.find((item) => item.id === page)?.label ?? page}</h1></div>
           <div className="topbar-actions">
             <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && !['register', 'cases'].includes(page)) setPage('cases'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
-            <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount}</b>}</button>
+            <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount > 9 ? '9+' : unreadCount}</b>}</button>
             {session.user.permissions.includes('import.manage') && <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>}
           </div>
         </header>

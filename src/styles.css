@@ -185,3 +185,5 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .bento-tile.wide:hover{border-color:#e6c98a;box-shadow:0 8px 22px rgba(163,95,12,.11)}
 .page-heading h2{font-size:27px;letter-spacing:-1px}
 @media(max-width:1100px){.dash-hero{grid-template-columns:1fr}.dash-bento{grid-template-columns:1fr}}
+/* Let grid children shrink so their inner .table-scroll scrolls instead of overflowing the page. */
+.dashboard-columns>article,.dashboard-columns>aside,.custody-workspace>*{min-width:0}

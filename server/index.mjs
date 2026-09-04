@@ -38,6 +38,12 @@ const otpProvider = config.nodeEnv === 'production'
 const releaseSigner = createReleaseSigner({ privateKey: config.releaseSigningPrivateKey, publicKey: config.releaseSigningPublicKey, keyId: config.releaseSigningKeyId });
 const RELEASE_TTL_MS = 90 * 24 * 60 * 60 * 1000; // ponytail: 90-day pass validity; make it configurable if a real retention policy appears
 const maskRegistration = (reg) => String(reg || '').replace(/.(?=.{4})/g, '•');
+// Normalize a stored mobile (raw 10-digit, 91-prefixed, or already spaced) to a consistent display.
+function formatMobile(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  const local = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits.length === 10 ? digits : null;
+  return local ? `+91 ${local.slice(0, 5)} ${local.slice(5)}` : String(value || '');
+}
 const appDirectory = dirname(fileURLToPath(import.meta.url));
 const uploadDirectory = join(appDirectory, 'uploads');
 mkdirSync(uploadDirectory, { recursive: true });
@@ -98,7 +104,7 @@ function mapCase(row, assignedAgents = []) {
     assignedAgents,
     id: row.id,
     accountNumber: row.account_number,
-    borrower: { name: row.borrower_name, mobile: row.borrower_mobile, address: row.borrower_address },
+    borrower: { name: row.borrower_name, mobile: formatMobile(row.borrower_mobile), address: row.borrower_address },
     vehicle: { registration: row.registration, makeModel: row.make_model, chassis: row.chassis, type: row.vehicle_type },
     branch: row.branch,
     pendingAmount: row.pending_amount / 100, // paise → rupees for display
@@ -135,7 +141,7 @@ function mapAgent(row, activeCases = 0, completedThisMonth = 0) {
 }
 
 function mapReleasePass(row, lifecycle = 'valid') {
-  return { id: row.id, caseId: row.case_id, verificationCode: row.verification_code, issuedAt: row.issued_at, borrowerName: row.borrower_name, borrowerMobile: row.borrower_mobile, vehicleRegistration: row.vehicle_registration, vehicleModel: row.vehicle_model, custodyId: row.custody_id ?? undefined, paymentReference: row.payment_reference ?? undefined, issuedByName: row.issued_by_name ?? undefined, signedToken: row.signed_token ?? undefined, lifecycle };
+  return { id: row.id, caseId: row.case_id, verificationCode: row.verification_code, issuedAt: row.issued_at, borrowerName: row.borrower_name, borrowerMobile: formatMobile(row.borrower_mobile), vehicleRegistration: row.vehicle_registration, vehicleModel: row.vehicle_model, custodyId: row.custody_id ?? undefined, paymentReference: row.payment_reference ?? undefined, issuedByName: row.issued_by_name ?? undefined, signedToken: row.signed_token ?? undefined, lifecycle };
 }
 
 async function auth(req, res, next) {
