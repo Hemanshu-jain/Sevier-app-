@@ -19,6 +19,14 @@ export function validateEvidenceFiles(files: Array<{ name: string; type: string;
   return null;
 }
 
+// House verification: 2 to 4 photos (no video), same size cap as vehicle evidence.
+export function validateVerificationPhotos(files: Array<{ name: string; type: string; size: number }>) {
+  if (files.length < 2 || files.length > 4) return 'Take 2 to 4 photos of the location.';
+  if (files.some((file) => !file.type.startsWith('image/') || !allowedEvidenceTypes.has(file.type))) return 'Use JPG, PNG or WebP photos only.';
+  if (files.some((file) => file.size > 15 * 1024 * 1024)) return 'Keep every photo at or below 15 MB.';
+  return null;
+}
+
 export function removeEvidenceFile<T>(files: T[], index: number) {
   return files.filter((_, currentIndex) => currentIndex !== index);
 }

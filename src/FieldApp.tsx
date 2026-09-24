@@ -16,15 +16,17 @@ import type { StoredFieldMutation } from './field-offline';
 import { canOpenFieldStep, classifyFieldSyncError, filterAgentCases, filterCaseEvidence, nextSyncableMutation, removeEvidenceFile, validateEvidenceFiles } from './field-workflow';
 import type { AttemptReason, EvidenceRecord, RecoveryCase } from './types';
 import { caseStatusLabel } from './types';
+import { readDeviceLocation } from './device-location';
+import type { FieldLocation } from './device-location';
+import FieldVerification from './FieldVerification';
 
 const reasonOptions: AttemptReason[] = ['Vehicle not found', 'Vehicle details mismatch', 'Unsafe situation', 'Customer dispute', 'Authority issue', 'Other'];
 const agentChecklist = ['Battery', 'Spare tyre', 'Fuel level', 'Matting', 'Keys and key number', 'Meter / odometer', 'Existing damages', 'Self motor', 'Wiper / motor', 'Stereo / infotainment', 'Ignition coil', 'Speakers', 'Side mirrors', 'Tyre condition'];
 const inspectionOptions = ['', 'Present / working', 'Missing', 'Damaged', 'Not applicable'];
-const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], groups: [], notifications: [], releasePasses: [] };
+const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], groups: [], notifications: [], releasePasses: [], verifications: [] };
 
 type FieldView = 'home' | 'notifications' | 'sync' | 'settings';
 type FieldStep = 'work' | 'verify' | 'evidence' | 'custody';
-type FieldLocation = { latitude: number; longitude: number; capturedAt: string };
 type FieldDraft = {
   registration: string;
   chassisLastSix: string;
@@ -59,7 +61,7 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 function mutationLabel(operation: StoredFieldMutation['operation']) {
-  return operation === 'evidence' ? 'Evidence upload' : operation === 'attempt' ? 'Unable-to-recover update' : 'Custody certificate';
+  return operation === 'evidence' ? 'Evidence upload' : operation === 'attempt' ? 'Unable-to-recover update' : operation === 'verification' ? 'House verification' : 'Custody certificate';
 }
 
 function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { session: Session; onLogout: () => void; onSessionUpdate: (user: Session['user']) => void }) {
@@ -68,6 +70,7 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
   const [view, setView] = useState<FieldView>('home');
   const [filter, setFilter] = useState<'active' | 'submitted'>('active');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedVerificationId, setSelectedVerificationId] = useState<string | null>(null);
   const [step, setStep] = useState<FieldStep>('work');
   const [draft, setDraft] = useState<FieldDraft>(createDraft);
   const [draftReady, setDraftReady] = useState(false);
@@ -130,6 +133,12 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
             const files = blobs.map((item) => new File([item.blob], item.name, { type: item.type }));
             const response = await api.uploadEvidence(session.token, current.caseId, files, current.id, payload.capturedAt, payload.location);
             setEvidence((existing) => [...response.evidence, ...existing.filter((item) => !response.evidence.some((saved) => saved.id === item.id))]);
+            await deleteEvidenceBlobs(payload.blobIds);
+          } else if (current.operation === 'verification') {
+            const payload = current.payload as { blobIds: string[]; capturedAt: string; location: FieldLocation; result: 'verified' | 'not_verified'; note: string };
+            const blobs = await loadEvidenceBlobs(payload.blobIds);
+            if (blobs.length !== payload.blobIds.length) throw new Error('One or more saved photos are missing from this device.');
+            await api.submitVerification(session.token, current.caseId, blobs.map((item) => new File([item.blob], item.name, { type: item.type })), current.id, payload);
             await deleteEvidenceBlobs(payload.blobIds);
           } else if (current.operation === 'attempt') {
             const payload = current.payload as { reason: AttemptReason; note: string; location?: FieldLocation };
@@ -230,23 +239,11 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
   }
 
   async function captureLocation() {
-    if (!navigator.geolocation) { setNotice('This device cannot provide a location. Use a GPS-enabled Android phone.'); return; }
-    // Phone browsers only expose geolocation on a secure origin (HTTPS or localhost). On a plain
-    // http:// LAN address the request fails with no useful reason, so name the real cause here.
-    if (!window.isSecureContext) { setNotice('Location needs a secure (HTTPS) connection. Open this app using its https:// address, then capture again.'); return; }
     setWorking(true);
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 }));
-      updateDraft({ location: { latitude: position.coords.latitude, longitude: position.coords.longitude, capturedAt: new Date().toISOString() } });
+      updateDraft({ location: await readDeviceLocation() });
       setNotice('Live location captured for this work order.');
-    } catch (error) {
-      const code = (error as GeolocationPositionError | undefined)?.code;
-      setNotice(
-        code === 1 ? 'Location permission was denied. Allow precise location for this site in your browser settings, then try again.'
-        : code === 3 ? 'Getting a location fix took too long. Move into open sky and capture again.'
-        : 'Location was not captured. Turn on precise location and try again.',
-      );
-    } finally { setWorking(false); }
+    } catch (error) { setNotice(errorMessage(error, 'Location was not captured.')); } finally { setWorking(false); }
   }
 
   function selectEvidence(files: File[]) {
@@ -334,6 +331,18 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
     } catch (error) { setNotice(errorMessage(error, 'Notifications could not be updated.')); }
   }
 
+  const verifications = workspace.verifications ?? [];
+  const selectedVerification = verifications.find((item) => item.id === selectedVerificationId) ?? null;
+  if (selectedVerification) {
+    return <main className="field-app"><FieldHeader title={selectedVerification.id} onBack={() => setSelectedVerificationId(null)} onLogout={onLogout} />
+      <section className="field-case">
+        <FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} />
+        <FieldVerification request={selectedVerification} userId={session.user.id} online={online} queued={mutations.some((item) => item.caseId === selectedVerification.id)} onNotice={setNotice}
+          onQueued={(mutation) => { setMutations((current) => [...current, mutation]); if (online) void syncQueue(); }} onOpenSync={() => { setSelectedVerificationId(null); setView('sync'); }} />
+      </section>
+    </main>;
+  }
+
   if (selected) {
     const serverSubmitted = filterAgentCases([selected], 'submitted').length > 0;
     const readOnly = serverSubmitted || finalQueued;
@@ -372,7 +381,7 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
 
   if (view === 'sync') return <main className="field-app"><FieldHeader title="PENDING SYNC" onBack={() => setView('home')} onLogout={onLogout} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><div className="field-screen-title"><div><p className="field-greeting">Device queue</p><h1>Pending sync</h1></div><button className="field-icon-action" aria-label="Retry synchronization" disabled={!online || syncing || !mutations.length} onClick={retryQueue}><RefreshCw className={syncing ? 'spin' : ''} size={18} /></button></div><p className="field-copy">Operations remain here until the finance server confirms them. There is no destructive discard action.</p><section className="field-list">{mutations.length ? mutations.map((item) => <article key={item.id} className="field-list-row"><ListChecks size={18} /><span><strong>{mutationLabel(item.operation)}</strong><small>{item.caseId} · {item.status === 'needs_attention' ? 'Needs attention' : item.status === 'syncing' ? 'Sending now' : online ? 'Waiting to send' : 'Waiting for connection'}</small><em>{new Date(item.createdAt).toLocaleString()} · {item.attemptCount ?? 0} attempt(s)</em>{item.error && <b role="alert">{item.error}</b>}</span></article>) : <p className="field-empty">Everything from this device has synchronized.</p>}</section></section></main>;
 
-  return <main className="field-app"><header className="field-header home"><div className="field-brand"><img src="/handoff-logo-white.png" alt="Handoff" /></div><nav className="field-home-actions" aria-label="Agent tools"><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={19} />{unreadCount > 0 && <i>{unreadCount > 9 ? '9+' : unreadCount}</i>}</button><button onClick={() => setView('sync')} aria-label={`${mutations.length} pending sync operations`}><Cloud size={19} />{mutations.length > 0 && <i>{mutations.length}</i>}</button><button onClick={() => setView('settings')} aria-label="Settings and profile"><Settings size={19} /></button></nav></header><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><p className="field-greeting">Good day, {session.user.name.split(' ')[0]}</p><h1>Your assignments</h1><p className="field-copy">Only work orders assigned to you are shown here.</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? syncing ? 'Online · synchronizing' : 'Online' : 'Offline · work will stay on this device'}</div>{loading ? <p className="field-copy">Loading secure assignments…</p> : <><div className="field-summary three"><span><strong>{filterAgentCases(assignments, 'active').length}</strong>active</span><span><strong>{filterAgentCases(assignments, 'submitted').length}</strong>submitted</span><span className={needsAttention ? 'attention' : ''}><strong>{needsAttention}</strong>needs attention</span></div><div className="field-tabs" role="tablist" aria-label="Assignment status"><button role="tab" aria-selected={filter === 'active'} className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active</button><button role="tab" aria-selected={filter === 'submitted'} className={filter === 'submitted' ? 'active' : ''} onClick={() => setFilter('submitted')}>Submitted</button></div><section className="assignment-cards">{visibleAssignments.length ? visibleAssignments.map((item) => <AssignmentCard key={item.id} item={item} submitted={filter === 'submitted'} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />) : <p className="field-empty">No {filter} work orders.</p>}</section></>}<div className="field-footer-note"><ShieldAlert size={16} /> Every update is time-stamped, tenant-scoped, and sent only to the finance company.</div></section></main>;
+  return <main className="field-app"><header className="field-header home"><div className="field-brand"><img src="/handoff-logo-white.png" alt="Handoff" /></div><nav className="field-home-actions" aria-label="Agent tools"><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={19} />{unreadCount > 0 && <i>{unreadCount > 9 ? '9+' : unreadCount}</i>}</button><button onClick={() => setView('sync')} aria-label={`${mutations.length} pending sync operations`}><Cloud size={19} />{mutations.length > 0 && <i>{mutations.length}</i>}</button><button onClick={() => setView('settings')} aria-label="Settings and profile"><Settings size={19} /></button></nav></header><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><p className="field-greeting">Good day, {session.user.name.split(' ')[0]}</p><h1>Your assignments</h1><p className="field-copy">Only work orders assigned to you are shown here.</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? syncing ? 'Online · synchronizing' : 'Online' : 'Offline · work will stay on this device'}</div>{loading ? <p className="field-copy">Loading secure assignments…</p> : <><div className="field-summary three"><span><strong>{filterAgentCases(assignments, 'active').length}</strong>active</span><span><strong>{filterAgentCases(assignments, 'submitted').length}</strong>submitted</span><span className={needsAttention ? 'attention' : ''}><strong>{needsAttention}</strong>needs attention</span></div>{verifications.length > 0 && <section className="field-list verification-jobs"><p className="field-label">House verifications</p>{verifications.map((item) => <button key={item.id} className="field-list-row" onClick={() => setSelectedVerificationId(item.id)}><MapPinned size={18} /><span><strong>{item.customer.name} · {item.customer.city}</strong><small>{item.reference} · {item.finance?.company ?? 'Finance company'}</small><em>{item.status === 'submitted' ? (item.result === 'verified' ? 'Submitted · verified' : 'Submitted · not verified') : mutations.some((mutation) => mutation.caseId === item.id) ? 'Saved on device · waiting to sync' : 'To visit'}</em></span><ChevronRight size={17} /></button>)}</section>}<div className="field-tabs" role="tablist" aria-label="Assignment status"><button role="tab" aria-selected={filter === 'active'} className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active</button><button role="tab" aria-selected={filter === 'submitted'} className={filter === 'submitted' ? 'active' : ''} onClick={() => setFilter('submitted')}>Submitted</button></div><section className="assignment-cards">{visibleAssignments.length ? visibleAssignments.map((item) => <AssignmentCard key={item.id} item={item} submitted={filter === 'submitted'} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />) : <p className="field-empty">No {filter} work orders.</p>}</section></>}<div className="field-footer-note"><ShieldAlert size={16} /> Every update is time-stamped, tenant-scoped, and sent only to the finance company.</div></section></main>;
 }
 
 function FieldHeader({ title, onBack, onLogout }: { title: string; onBack: () => void; onLogout: () => void }) {

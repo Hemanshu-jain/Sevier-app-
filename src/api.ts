@@ -1,4 +1,4 @@
-import type { Agent, AgentGroup, AgentRates, AgentRating, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AgentRates, AgentRating, VerificationRequest, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import { apiUrl } from './api-origin.ts';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent' | 'platform_admin';
@@ -35,6 +35,18 @@ export interface Workspace {
   groups: AgentGroup[];
   notifications: AppNotification[];
   releasePasses: ReleasePass[];
+  verifications?: VerificationRequest[];
+}
+
+export interface VerificationInput {
+  reference: string;
+  customerName: string;
+  customerMobile: string;
+  address: string;
+  landmark: string;
+  city: string;
+  pincode: string;
+  instructions: string;
 }
 
 export interface ImportResult {
@@ -228,8 +240,27 @@ export const api = {
   revokeReleasePass: (token: string, caseId: string, reason: string) => request<{ ok: boolean }>(`/api/cases/${caseId}/release-revocation`, { method: 'POST', body: JSON.stringify({ reason }) }, token),
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
   billing: (token: string) => request<BillingSummary>('/api/billing', {}, token),
+  createVerification: (token: string, values: VerificationInput) => request<{ verification: VerificationRequest; billing: ChargeSummary }>('/api/verifications', { method: 'POST', body: JSON.stringify(values) }, token),
+  assignVerification: (token: string, requestId: string, agentId: string) => request<{ verification: VerificationRequest }>(`/api/verifications/${requestId}/assignment`, { method: 'PUT', body: JSON.stringify({ agentId }) }, token),
+  cancelVerification: (token: string, requestId: string) => request<{ verification: VerificationRequest }>(`/api/verifications/${requestId}/cancel`, { method: 'POST' }, token),
+  verificationEvidence: (token: string, requestId: string) => request<{ evidence: EvidenceRecord[] }>(`/api/verifications/${requestId}/evidence`, {}, token),
+  verificationPhoto: async (token: string, evidenceId: string) => {
+    const response = await fetch(apiUrl(`/api/verification-evidence/${evidenceId}/file`, import.meta.env.VITE_API_ORIGIN), { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new ApiError('The photo could not be loaded.', response.status);
+    return response.blob();
+  },
+  submitVerification: (token: string, requestId: string, files: File[], mutationId: string, values: { capturedAt: string; location: { latitude: number; longitude: number }; result: 'verified' | 'not_verified'; note: string }) => {
+    const body = new FormData();
+    for (const file of files) body.append('files', file);
+    body.append('capturedAt', values.capturedAt);
+    body.append('latitude', String(values.location.latitude));
+    body.append('longitude', String(values.location.longitude));
+    body.append('result', values.result);
+    body.append('note', values.note);
+    return request<{ verification: VerificationRequest }>(`/api/verifications/${requestId}/submit`, { method: 'POST', headers: { 'Idempotency-Key': mutationId }, body }, token);
+  },
   setAgentVisibility: (token: string, caseId: string, visibility: { customer: boolean; vehicle: boolean }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/agent-visibility`, { method: 'PUT', body: JSON.stringify(visibility) }, token),
-  rateAgent: (token: string, values: { caseId: string; agentId: string; stars: number; comment?: string }) => request<{ rating: { stars: number } }>('/api/ratings', { method: 'POST', body: JSON.stringify(values) }, token),
+  rateAgent: (token: string, values: { jobType?: 'case' | 'verification'; caseId?: string; jobId?: string; agentId: string; stars: number; comment?: string }) => request<{ rating: { stars: number } }>('/api/ratings', { method: 'POST', body: JSON.stringify(values) }, token),
   apiKeys: (token: string) => request<{ keys: ApiKey[] }>('/api/api-keys', {}, token),
   createApiKey: (token: string, name: string) => request<{ key: ApiKey & { key: string } }>('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) }, token),
   revokeApiKey: (token: string, keyId: string) => request<void>(`/api/api-keys/${keyId}`, { method: 'DELETE' }, token),

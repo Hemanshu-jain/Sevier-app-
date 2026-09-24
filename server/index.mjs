@@ -19,6 +19,7 @@ import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { agentRates, createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
 import { rateAgent, ratingSummaries } from './agent-ratings.mjs';
+import { VERIFICATION_PHOTOS, assignVerification, cancelVerification, createVerification, listVerifications, mapVerification, validateVerificationSubmission } from './verification.mjs';
 import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
 import { createAccount, normalizeAccountRows, updateAccount } from './account-management.mjs';
 import { createApiKey, findActiveApiKey, listApiKeys, revokeApiKey } from './api-keys.mjs';
@@ -205,7 +206,8 @@ function requireFieldMutation(operation) {
     const validationError = validateIdempotencyKey(key);
     if (validationError) return res.status(422).json({ error: validationError });
     try {
-      const identity = { tenantId: req.recoveryCase.tenant_id, userId: req.user.id, key, caseId: req.recoveryCase.id, operation };
+      const job = req.recoveryCase ?? req.verification;
+      const identity = { tenantId: job.tenant_id, userId: req.user.id, key, caseId: job.id, operation };
       const receipt = await readFieldMutation(pool, identity);
       if (receipt) return res.status(receipt.statusCode).json(receipt.body);
       req.fieldMutation = identity;
@@ -340,7 +342,7 @@ app.get('/api/workspace', auth, async (req, res) => {
   const agentsByCase = new Map();
   for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name, stars: row.stars ?? undefined }); agentsByCase.set(row.case_id, list); }
   const groups = isAgent ? [] : await listGroups({ database: pool, tenantId: req.user.tenantId });
-  res.json({ cases: caseRows.map((row) => { const item = mapCase(row, agentsByCase.get(row.id) || []); return isAgent ? redactForAgent(item) : item; }), custody: custodyRows.map(mapCustody), agents: agentData, groups, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
+  res.json({ cases: caseRows.map((row) => { const item = mapCase(row, agentsByCase.get(row.id) || []); return isAgent ? redactForAgent(item) : item; }), custody: custodyRows.map(mapCustody), agents: agentData, groups, verifications: (await listVerifications(pool, req.user)).map((row) => mapVerification(row, formatMobile)), notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -593,15 +595,122 @@ app.put('/api/cases/:id/agent-visibility', auth, requirePermission(PERMISSIONS.C
 });
 
 app.post('/api/ratings', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
-  const caseRow = await caseForUser(String(req.body?.caseId || ''), req.user);
-  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const jobType = req.body?.jobType === 'verification' ? 'verification' : 'case';
+  const jobId = String(req.body?.jobId || req.body?.caseId || '');
+  const job = jobType === 'verification' ? await verificationForUser(jobId, req.user) : await caseForUser(jobId, req.user);
+  if (!job) return res.status(404).json({ error: 'Job not found.' });
   try {
-    const rating = await rateAgent({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, caseId: caseRow.id, agentId: String(req.body?.agentId || ''), stars: req.body?.stars, comment: req.body?.comment });
-    await addAudit(pool, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'agent.rated', detail: `Rated the agent ${rating.stars}/5 for this case.` });
+    const rating = await rateAgent({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, jobType, jobId: job.id, agentId: String(req.body?.agentId || ''), stars: req.body?.stars, comment: req.body?.comment });
+    await addAudit(pool, { tenantId: req.user.tenantId, caseId: jobType === 'case' ? job.id : null, actorUserId: req.user.id, action: 'agent.rated', detail: `Rated the agent ${rating.stars}/5 for ${job.id}.` });
     return res.status(201).json({ rating });
   } catch (error) {
     return res.status(422).json({ error: error instanceof Error ? error.message : 'The rating could not be saved.' });
   }
+});
+
+// ---- House / location verification ----
+async function verificationForUser(id, user) {
+  const request = await queryOne(pool, 'SELECT * FROM verification_requests WHERE id = ?', [id]);
+  if (!request) return null;
+  if (user.role === 'agent') return request.assigned_agent_user_id === user.id ? request : null;
+  return request.tenant_id === user.tenantId ? request : null;
+}
+
+const verificationRow = (id) => queryOne(pool, 'SELECT v.*, a.name AS agent_name FROM verification_requests v LEFT JOIN users a ON a.id = v.assigned_agent_user_id WHERE v.id = ?', [id]);
+
+app.post('/api/verifications', auth, requirePermission(PERMISSIONS.CASE_CREATE), async (req, res) => {
+  try {
+    const { id, billing } = await createVerification({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, values: req.body ?? {} });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'verification.created', detail: `House verification ${id} requested.${billing.pending ? ' Locked until the wallet is recharged.' : ''}` });
+    return res.status(201).json({ verification: mapVerification(await verificationRow(id), formatMobile), billing });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The verification request could not be created.' });
+  }
+});
+
+app.put('/api/verifications/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
+  try {
+    const assigned = await assignVerification({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, requestId: req.params.id, agentId: String(req.body?.agentId || '') });
+    await addNotification(pool, { tenantId: req.user.tenantId, recipientUserId: assigned.agentId, title: 'New house verification', detail: `${assigned.id}: visit the customer's address and verify it with GPS and photos.`, tone: 'blue' });
+    if (assigned.previousAgentId && assigned.previousAgentId !== assigned.agentId) await addNotification(pool, { tenantId: req.user.tenantId, recipientUserId: assigned.previousAgentId, title: 'Verification reassigned', detail: `${assigned.id} was moved to another agent.`, tone: 'amber' });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'verification.assigned', detail: `${assigned.id} assigned to an agent.` });
+    return res.json({ verification: mapVerification(await verificationRow(assigned.id), formatMobile) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The request could not be assigned.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.post('/api/verifications/:id/cancel', auth, requirePermission(PERMISSIONS.CASE_CREATE), async (req, res) => {
+  const request = await verificationForUser(req.params.id, req.user);
+  if (!request) return res.status(404).json({ error: 'Verification request not found.' });
+  try {
+    await cancelVerification({ database: pool, tenantId: req.user.tenantId, requestId: request.id });
+    if (request.assigned_agent_user_id) await addNotification(pool, { tenantId: req.user.tenantId, recipientUserId: request.assigned_agent_user_id, title: 'Verification cancelled', detail: `${request.id} was cancelled by the financer.`, tone: 'amber' });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'verification.cancelled', detail: `${request.id} cancelled (platform fee not refunded).` });
+    return res.json({ verification: mapVerification(await verificationRow(request.id), formatMobile) });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The request could not be cancelled.' });
+  }
+});
+
+async function loadAssignedVerification(req, res, next) {
+  const request = await verificationForUser(req.params.id, req.user);
+  if (!request || request.assigned_agent_user_id !== req.user.id) return res.status(404).json({ error: 'Verification request not found.' });
+  // Status is checked after requireFieldMutation, so a retried submit replays its saved result instead of failing.
+  req.verification = request;
+  return next();
+}
+
+app.post('/api/verifications/:id/submit', auth, requirePermission(PERMISSIONS.ATTEMPT_SUBMIT), loadAssignedVerification, requireFieldMutation('verification'), upload.array('files', VERIFICATION_PHOTOS.max), async (req, res, next) => {
+  const files = req.files ?? [];
+  const request = req.verification;
+  const reject = (message) => { deleteUploads(files); return res.status(422).json({ error: message }); };
+  if (request.status !== 'assigned') return reject('This verification is no longer an active assignment.');
+  if (files.some((file) => !file.mimetype.startsWith('image/') || !isAllowedEvidenceFile(readFileSync(file.path), file.mimetype))) return reject('Upload JPG, PNG or WebP photos only.');
+  const location = readLocation(req.body);
+  if (location.error) return reject(location.error);
+  const result = String(req.body?.result || '');
+  const note = String(req.body?.note || '').trim();
+  const invalid = validateVerificationSubmission({ result, note, photoCount: files.length });
+  if (invalid) return reject(invalid);
+  const capturedAt = String(req.body?.capturedAt || isoNow());
+  if (Number.isNaN(Date.parse(capturedAt))) return reject('Photo capture time is invalid.');
+  const submittedAt = isoNow();
+  const verified = result === 'verified';
+  try {
+    const body = await tx(pool, async (conn) => {
+      for (const file of files) {
+        await query(conn, 'INSERT INTO verification_evidence (id, tenant_id, request_id, agent_user_id, file_name, original_name, mime_type, byte_size, latitude, longitude, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [`ve-${crypto.randomUUID()}`, request.tenant_id, request.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, location.latitude, location.longitude, capturedAt]);
+      }
+      const updated = await query(conn, "UPDATE verification_requests SET status = 'submitted', result = ?, result_note = ?, latitude = ?, longitude = ?, submitted_at = ?, updated_at = ? WHERE id = ? AND status = 'assigned'",
+        [result, note, location.latitude, location.longitude, submittedAt, submittedAt, request.id]);
+      if (updated.affectedRows !== 1) throw new Error('The verification could not be updated.');
+      await addNotification(conn, { tenantId: request.tenant_id, title: verified ? 'Location verified' : 'Location could not be verified', detail: `${request.reference} · ${request.customer_name}: ${note}`, tone: verified ? 'green' : 'amber' });
+      await addAudit(conn, { tenantId: request.tenant_id, actorUserId: req.user.id, action: 'verification.submitted', detail: `${request.id} ${verified ? 'verified' : 'not verified'} at GPS ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)} with ${files.length} photo(s).` });
+      const response = { verification: mapVerification(await queryOne(conn, 'SELECT * FROM verification_requests WHERE id = ?', [request.id]), formatMobile) };
+      await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 201, body: response, createdAt: submittedAt });
+      return response;
+    });
+    return res.status(201).json(body);
+  } catch (error) {
+    deleteUploads(files);
+    return next(error);
+  }
+});
+
+app.get('/api/verifications/:id/evidence', auth, async (req, res) => {
+  const request = await verificationForUser(req.params.id, req.user);
+  if (!request) return res.status(404).json({ error: 'Verification request not found.' });
+  const rows = await query(pool, 'SELECT e.*, users.name AS agent_name FROM verification_evidence e JOIN users ON users.id = e.agent_user_id WHERE e.request_id = ? ORDER BY e.captured_at', [request.id]);
+  res.json({ evidence: rows.map((row) => ({ ...mapEvidence(row), caseId: row.request_id })) });
+});
+
+app.get('/api/verification-evidence/:id/file', auth, async (req, res) => {
+  const evidence = await queryOne(pool, 'SELECT * FROM verification_evidence WHERE id = ?', [req.params.id]);
+  if (!evidence || !(await verificationForUser(evidence.request_id, req.user))) return res.status(404).json({ error: 'Photo not found.' });
+  res.type(evidence.mime_type).sendFile(join(uploadDirectory, evidence.file_name));
 });
 
 // ---- API keys: management (tenant owner) and the external v1 API ----

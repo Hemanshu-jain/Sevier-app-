@@ -31,15 +31,15 @@ test('agents can be rated only after a field outcome, re-rating overwrites, and 
     const caseId = await makeCase(pool, { tenantId, assignedAgentUserId: agentId });
     const otherCase = await makeCase(pool, { tenantId: otherTenant, assignedAgentUserId: agentId });
 
-    await assert.rejects(rateAgent({ database: pool, tenantId, userId: financeUser, caseId, agentId, stars: 5 }), /after they submit a field outcome/);
+    await assert.rejects(rateAgent({ database: pool, tenantId, userId: financeUser, jobId: caseId, agentId, stars: 5 }), /after they submit a field outcome/);
     const outcome = "INSERT INTO audit_events (tenant_id, case_id, actor_user_id, action, detail, created_at) VALUES (?, ?, ?, 'custody.created', 'x', '2026-09-24T00:00:00.000Z')";
     await query(pool, outcome, [tenantId, caseId, agentId]);
     await query(pool, outcome, [otherTenant, otherCase, agentId]);
 
-    await assert.rejects(rateAgent({ database: pool, tenantId, userId: financeUser, caseId, agentId, stars: 6 }), /1 to 5/);
-    await rateAgent({ database: pool, tenantId, userId: financeUser, caseId, agentId, stars: 2 });
-    await rateAgent({ database: pool, tenantId, userId: financeUser, caseId, agentId, stars: 4, comment: 'Fast and careful' });
-    await rateAgent({ database: pool, tenantId: otherTenant, userId: otherFinance, caseId: otherCase, agentId, stars: 5 });
+    await assert.rejects(rateAgent({ database: pool, tenantId, userId: financeUser, jobId: caseId, agentId, stars: 6 }), /1 to 5/);
+    await rateAgent({ database: pool, tenantId, userId: financeUser, jobId: caseId, agentId, stars: 2 });
+    await rateAgent({ database: pool, tenantId, userId: financeUser, jobId: caseId, agentId, stars: 4, comment: 'Fast and careful' });
+    await rateAgent({ database: pool, tenantId: otherTenant, userId: otherFinance, jobId: otherCase, agentId, stars: 5 });
     assert.deepEqual((await ratingSummaries(pool, [agentId])).get(agentId), { average: 4.5, count: 2 });
   } finally {
     await pool.end();

@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import type { AccountInput, DirectoryAgent, Session } from './api';
-import type { Agent, AgentGroup, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AppNotification, AuditEvent, CaseStatus, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass, VerificationRequest } from './types';
 import QRCode from 'qrcode';
 import { caseStatusLabel } from './types';
 import { financeCaseAction } from './finance-case-action';
@@ -39,6 +39,8 @@ import { financeReviewCases } from './desktop-metrics';
 import BillingPage, { rupees } from './BillingPage';
 import ApiKeysCard from './ApiKeysCard';
 import CaseAgentPanel, { RatingBadge, rateText } from './CaseAgentPanel';
+import Modal from './Modal';
+import { VerificationTab } from './VerificationPages';
 
 type Page = 'requests' | 'dashboard' | 'billing' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
 type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | 'close' | null;
@@ -98,6 +100,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   const [cases, setCases] = useState<RecoveryCase[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
   const [releasePasses, setReleasePasses] = useState<ReleasePass[]>([]);
+  const [verifications, setVerifications] = useState<VerificationRequest[]>([]);
   const [agentList, setAgentList] = useState<Agent[]>([]);
   const [groups, setGroups] = useState<AgentGroup[]>([]);
   const [appNotifications, setAppNotifications] = useState<AppNotification[]>([]);
@@ -139,6 +142,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
     setCases(workspace.cases);
     setCustody(workspace.custody);
     setReleasePasses(workspace.releasePasses);
+    setVerifications(workspace.verifications ?? []);
     setAgentList(workspace.agents);
     setGroups(workspace.groups ?? []);
     setAppNotifications(workspace.notifications);
@@ -394,7 +398,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} onOpenBilling={canBill ? () => setPage('billing') : undefined} />,
+    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} onOpenBilling={canBill ? () => setPage('billing') : undefined} verificationCount={verifications.length} verificationTab={<VerificationTab verifications={verifications} agents={agentList} session={session} onChanged={loadWorkspace} />} />,
     billing: <BillingPage session={session} />,
     dashboard: <Dashboard cases={cases} agentList={agentList} pendingReview={pendingReview} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
@@ -489,12 +493,16 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase, onOpenBilling }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void; onOpenBilling?: () => void }) {
+function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase, onOpenBilling, verificationTab, verificationCount }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void; onOpenBilling?: () => void; verificationTab: ReactNode; verificationCount: number }) {
+  const [tab, setTab] = useState<'vehicle' | 'verification'>('vehicle');
   const lockedCount = allCases.filter((item) => item.billingLocked).length;
   const [status, setStatus] = useState('All');
   const counts = applicationCounts(allCases);
   const filtered = (status === 'All' ? cases : cases.filter((item) => item.status === status)).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const tabs = <div className="request-tabs" role="tablist" aria-label="Request type"><button role="tab" aria-selected={tab === 'vehicle'} className={tab === 'vehicle' ? 'active' : ''} onClick={() => setTab('vehicle')}>Vehicle seizure <b>{allCases.length}</b></button><button role="tab" aria-selected={tab === 'verification'} className={tab === 'verification' ? 'active' : ''} onClick={() => setTab('verification')}>House verification <b>{verificationCount}</b></button></div>;
+  if (tab === 'verification') return <>{tabs}{verificationTab}</>;
   return <>
+    {tabs}
     <div className="page-heading"><div><p className="eyebrow">Vehicle seizure</p><h2>Application requests</h2><p className="page-copy">Each imported or added account is one application. Open it to review, approve authority and assign an agent.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}{canImport && <button className="primary-button" onClick={onImport}><Plus size={16} /> Import file</button>}</div></div>
     <section className="count-strip">
       <div><strong>{counts.thisMonth}</strong><span>Applications this month</span></div>
@@ -747,21 +755,6 @@ function PrintableReleasePass({ pass, caseItem, custody, tenantName }: { pass: R
     <div className="pass-signatures"><div><span className="pass-sign-line" />Customer signature</div><div><span className="pass-sign-line" />Authorised finance signatory</div></div>
     <footer className="pass-authenticity"><ShieldCheck size={13} /><span>Finance-issued release record · Pass {pass.id}{verifyUrl ? ` · Verify at ${verifyUrl}` : ''}</span></footer>
   </section>;
-}
-
-function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  const titleId = useId();
-  const modalRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    modalRef.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => { window.removeEventListener('keydown', closeOnEscape); previousFocus?.focus(); };
-  }, [onClose]);
-
-  return <div className="modal-backdrop" role="presentation"><section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}><div className="modal-heading"><div><p className="eyebrow">Finance-controlled workflow</p><h2 id={titleId}>{title}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label={`Close ${title}`}><X size={18} /></button></div>{children}</section></div>;
 }
 
 function ImportDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {

@@ -194,6 +194,9 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .platform-shell{min-height:100vh;background:var(--page)}.platform-header{display:flex;align-items:center;gap:14px;background:var(--navy);color:#fff;padding:14px 24px}.platform-header span{flex:1;font-weight:700}.platform-header .text-button{color:#fff;display:inline-flex;align-items:center;gap:6px}
 .platform-main{max-width:1120px;margin:0 auto;padding:24px 16px;display:grid;gap:16px}.platform-main .count-strip{margin-bottom:0}
 .row-buttons{display:flex;gap:8px;justify-content:flex-end}
+.request-tabs{display:inline-flex;gap:4px;background:#eceff3;border-radius:8px;padding:4px;margin-bottom:16px}.request-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 14px;font-weight:700;color:var(--muted);display:inline-flex;gap:8px;align-items:center}.request-tabs button b{font:11px DM Mono,monospace;color:var(--muted)}.request-tabs button.active{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
+.cost-summary{display:grid;gap:4px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:10px 0;background:var(--page);font-size:12px;color:var(--muted)}.cost-summary strong{color:var(--ink)}
+.verification-jobs{margin-bottom:14px}
 .rating-badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:var(--ink);white-space:nowrap}.rating-badge svg{fill:#c4841d;color:#c4841d}.rating-badge small{color:var(--muted);font-weight:600}.rating-badge.none{color:var(--muted);font-weight:600}
 .agent-meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
 .rate-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0}

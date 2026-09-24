@@ -7,8 +7,8 @@ import { query, queryOne, tx } from './mysql.mjs';
 
 export const TOPUP_AMOUNTS_PAISE = Object.freeze([200000, 500000, 1000000]);
 
-const PRICE_COLUMN = { case_import: 'vehicle_row_paise', case_manual: 'vehicle_row_paise', case_api: 'vehicle_row_paise' };
-const LOCK_TABLE = { case_import: 'recovery_cases', case_manual: 'recovery_cases', case_api: 'recovery_cases' };
+const PRICE_COLUMN = { case_import: 'vehicle_row_paise', case_manual: 'vehicle_row_paise', case_api: 'vehicle_row_paise', verification: 'verification_fee_paise' };
+const LOCK_TABLE = { case_import: 'recovery_cases', case_manual: 'recovery_cases', case_api: 'recovery_cases', verification: 'verification_requests' };
 
 export async function platformSettings(executor) {
   return queryOne(executor, 'SELECT * FROM platform_settings WHERE id = 1');

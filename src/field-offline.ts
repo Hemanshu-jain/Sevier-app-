@@ -16,7 +16,7 @@ export interface StoredFieldMutation {
   id: string;
   userId: string;
   caseId: string;
-  operation: 'evidence' | 'attempt' | 'custody';
+  operation: 'evidence' | 'attempt' | 'custody' | 'verification';
   status: 'pending' | 'syncing' | 'synced' | 'needs_attention';
   dependencyIds: string[];
   createdAt: string;

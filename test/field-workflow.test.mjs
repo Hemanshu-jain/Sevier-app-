@@ -9,6 +9,7 @@ import {
   nextSyncableMutation,
   removeEvidenceFile,
   validateEvidenceFiles,
+  validateVerificationPhotos,
 } from '../src/field-workflow.ts';
 
 test('custody waits for queued evidence', () => {
@@ -59,4 +60,13 @@ test('sync failures distinguish offline, authentication, validation, and retryab
   assert.equal(classifyFieldSyncError(new ApiError('expired', 401)), 'authentication');
   assert.equal(classifyFieldSyncError(new ApiError('invalid', 422)), 'needs_attention');
   assert.equal(classifyFieldSyncError(new ApiError('down', 503)), 'retryable');
+});
+
+test('house verification needs 2 to 4 photos and no video', () => {
+  const photo = { name: 'front.jpg', type: 'image/jpeg', size: 1_000 };
+  assert.equal(validateVerificationPhotos([photo, photo]), null);
+  assert.match(validateVerificationPhotos([photo]), /2 to 4/);
+  assert.match(validateVerificationPhotos([photo, photo, photo, photo, photo]), /2 to 4/);
+  assert.match(validateVerificationPhotos([photo, { name: 'clip.mp4', type: 'video/mp4', size: 1_000 }]), /photos only/);
+  assert.match(validateVerificationPhotos([photo, { ...photo, size: 16 * 1024 * 1024 }]), /15 MB/);
 });

@@ -34,6 +34,31 @@ export interface Agent {
   rates?: AgentRates;
 }
 
+export type VerificationStatus = 'open' | 'assigned' | 'submitted' | 'cancelled';
+
+export interface VerificationRequest {
+  id: string;
+  reference: string;
+  customer: { name: string; mobile: string; address: string; landmark?: string; city: string; pincode?: string };
+  instructions?: string;
+  status: VerificationStatus;
+  billingLocked: boolean;
+  platformFee: number;
+  agentRate: number | null;
+  createdAt: string;
+  updatedAt: string;
+  assignedAgentId?: string;
+  assignedAgentName?: string;
+  agentStars?: number;
+  assignedAt?: string;
+  result?: 'verified' | 'not_verified';
+  resultNote?: string;
+  latitude?: number;
+  longitude?: number;
+  submittedAt?: string;
+  finance?: { company: string; contactName?: string; contactMobile?: string };
+}
+
 export interface AgentRating {
   average: number;
   count: number;
