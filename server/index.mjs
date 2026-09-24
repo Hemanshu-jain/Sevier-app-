@@ -220,7 +220,8 @@ app.post('/api/auth/request-otp', otpLimiter, async (req, res) => {
     const mobile = String(req.body?.mobile || '');
     const result = await requestSignInOtp({ database: pool, otpProvider, mobile, requestIp: req.ip });
     const user = await queryOne(pool, 'SELECT * FROM users WHERE mobile_e164 = ?', [normalizeIndiaMobile(mobile)]);
-    await addAudit(pool, { tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.otp_requested', detail: 'A sign-in OTP was requested.' });
+    // Self-registered agents have no tenant yet; audit rows require one. Mirror the verify-otp guard below.
+    if (user.tenant_id) await addAudit(pool, { tenantId: user.tenant_id, actorUserId: user.id, action: 'auth.otp_requested', detail: 'A sign-in OTP was requested.' });
     return res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'OTP could not be sent.';
