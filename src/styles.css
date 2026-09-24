@@ -194,6 +194,9 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .platform-shell{min-height:100vh;background:var(--page)}.platform-header{display:flex;align-items:center;gap:14px;background:var(--navy);color:#fff;padding:14px 24px}.platform-header span{flex:1;font-weight:700}.platform-header .text-button{color:#fff;display:inline-flex;align-items:center;gap:6px}
 .platform-main{max-width:1120px;margin:0 auto;padding:24px 16px;display:grid;gap:16px}.platform-main .count-strip{margin-bottom:0}
 .row-buttons{display:flex;gap:8px;justify-content:flex-end}
+.inline-form{display:flex;align-items:flex-end;gap:10px;margin:12px 0}.inline-form .field-label{flex:1;margin:0}
+.new-key{display:flex;flex-wrap:wrap;align-items:center;gap:10px;border:1px solid #cfe3d6;background:var(--green-soft);border-radius:8px;padding:12px 14px;margin-bottom:12px}.new-key p{margin:0;width:100%}.new-key code{flex:1;font:12px DM Mono,monospace;word-break:break-all}
+.api-docs{margin-top:12px}.api-docs summary{cursor:pointer;font-weight:700;color:var(--blue)}.api-docs pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;overflow-x:auto;font:11.5px/1.6 DM Mono,monospace;white-space:pre}
 @media(max-width:760px){.recharge-options{grid-template-columns:1fr}}
 th{font-size:11px;letter-spacing:.3px}
 @media(max-width:760px){.count-strip{grid-template-columns:repeat(2,1fr)}.count-strip>:nth-child(2){border-right:0}.count-strip>:nth-child(-n+2){border-bottom:1px solid var(--line)}}

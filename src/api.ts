@@ -91,6 +91,16 @@ export interface PlatformOverview {
   settings: PlatformSettings;
 }
 
+export interface ApiKey {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  createdBy?: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+}
+
 export interface ImportError {
   row: number;
   message: string;
@@ -215,6 +225,9 @@ export const api = {
   revokeReleasePass: (token: string, caseId: string, reason: string) => request<{ ok: boolean }>(`/api/cases/${caseId}/release-revocation`, { method: 'POST', body: JSON.stringify({ reason }) }, token),
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
   billing: (token: string) => request<BillingSummary>('/api/billing', {}, token),
+  apiKeys: (token: string) => request<{ keys: ApiKey[] }>('/api/api-keys', {}, token),
+  createApiKey: (token: string, name: string) => request<{ key: ApiKey & { key: string } }>('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) }, token),
+  revokeApiKey: (token: string, keyId: string) => request<void>(`/api/api-keys/${keyId}`, { method: 'DELETE' }, token),
   requestTopup: (token: string, amountPaise: number, reference: string) => request<{ topup: Topup }>('/api/billing/topups', { method: 'POST', body: JSON.stringify({ amountPaise, reference }) }, token),
   platformOverview: (token: string) => request<PlatformOverview>('/api/platform/overview', {}, token),
   decideTopup: (token: string, topupId: string, decision: 'confirm' | 'reject') => request<{ settled: number }>(`/api/platform/topups/${topupId}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }, token),

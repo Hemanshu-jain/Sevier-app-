@@ -19,7 +19,8 @@ import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
 import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
-import { createAccount, updateAccount } from './account-management.mjs';
+import { createAccount, normalizeAccountRows, updateAccount } from './account-management.mjs';
+import { createApiKey, findActiveApiKey, listApiKeys, revokeApiKey } from './api-keys.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
 import { readLocation, validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
@@ -27,7 +28,7 @@ import { persistCustody, persistReleasePass } from './workflow-persistence.mjs';
 import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from './field-mutations.mjs';
 import { listNotifications, markNotificationsRead } from './notification-access.mjs';
 import { createReleaseSigner } from './release-signing.mjs';
-import { rateLimit } from './rate-limit.mjs';
+import { clientKey, rateLimit } from './rate-limit.mjs';
 
 const app = express();
 // Behind Cloudflare (tunnel or proxied DNS): trust the proxy so req.ip is the real client
@@ -561,6 +562,90 @@ app.put('/api/platform/settings', auth, requirePlatform, async (req, res) => {
   if (paymentInstructions.length > 2000) return res.status(422).json({ error: 'Keep payment instructions within 2,000 characters.' });
   await query(pool, 'UPDATE platform_settings SET vehicle_row_paise = ?, verification_fee_paise = ?, payment_instructions = ?, updated_at = ? WHERE id = 1', [vehicleRowPaise, verificationFeePaise, paymentInstructions || null, isoNow()]);
   res.json({ settings: { vehicleRowPaise, verificationFeePaise, paymentInstructions } });
+});
+
+// ---- API keys: management (tenant owner) and the external v1 API ----
+app.get('/api/api-keys', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
+  res.json({ keys: await listApiKeys(pool, req.user.tenantId) });
+});
+
+app.post('/api/api-keys', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
+  try {
+    const key = await createApiKey({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, name: req.body?.name });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'api_key.created', detail: `API key "${key.name}" (${key.keyPrefix}…) was created.` });
+    return res.status(201).json({ key });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The API key could not be created.' });
+  }
+});
+
+app.delete('/api/api-keys/:id', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
+  try {
+    await revokeApiKey({ database: pool, tenantId: req.user.tenantId, keyId: req.params.id });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'api_key.revoked', detail: 'An API key was revoked.' });
+    return res.status(204).end();
+  } catch (error) {
+    return res.status(404).json({ error: error instanceof Error ? error.message : 'API key not found.' });
+  }
+});
+
+async function apiKeyAuth(req, res, next) {
+  const key = await findActiveApiKey(pool, String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+  if (!key) return res.status(401).json({ error: 'A valid API key is required.' });
+  req.apiKey = key;
+  await query(pool, 'UPDATE api_keys SET last_used_at = ? WHERE id = ?', [isoNow(), key.id]);
+  return next();
+}
+const apiKeyLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, key: (req) => req.apiKey?.id ?? clientKey(req) });
+const MAX_API_BATCH = 1000;
+
+// Upserts by account number, exactly like a spreadsheet import; every accepted row is billed.
+app.post('/api/v1/cases', apiKeyAuth, apiKeyLimiter, async (req, res, next) => {
+  const list = Array.isArray(req.body) ? req.body : Array.isArray(req.body?.cases) ? req.body.cases : req.body && typeof req.body === 'object' ? [req.body] : [];
+  if (!list.length || list.length > MAX_API_BATCH) return res.status(422).json({ error: `Send between 1 and ${MAX_API_BATCH} cases per request.` });
+  const normalized = normalizeAccountRows(list);
+  const errors = normalized.errors.map((error) => ({ index: error.row - 2, message: error.message }));
+  if (!normalized.valid.length) return res.status(422).json({ error: 'No valid cases were found.', errors });
+  const now = new Date();
+  try {
+    const result = await importMonthlyRows({
+      database: pool,
+      tenantId: req.apiKey.tenant_id,
+      actorUserId: req.apiKey.created_by_user_id,
+      snapshotMonth: `${now.toISOString().slice(0, 7)}-01`,
+      fileName: `API · ${req.apiKey.name}`,
+      fileSha256: createHash('sha256').update(`${req.apiKey.id}:${now.toISOString()}:${randomUUID()}`).digest('hex'),
+      rows: normalized.valid,
+      rejectedRows: errors.length,
+      itemType: 'case_api',
+      now,
+    });
+    await addAudit(pool, { tenantId: req.apiKey.tenant_id, actorUserId: req.apiKey.created_by_user_id, action: 'api.cases_pushed', detail: `${req.apiKey.name}: ${result.accepted} accepted (${result.created} new, ${result.updated} updated), ${result.rejected} rejected.` });
+    return res.status(201).json({ accepted: result.accepted, rejected: result.rejected, created: result.created, updated: result.updated, billing: result.billing, errors });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// "Remove" = cancel, and only while no agent has the case. The charge is not refunded.
+app.delete('/api/v1/cases/:accountNumber', apiKeyAuth, apiKeyLimiter, async (req, res) => {
+  const tenantId = req.apiKey.tenant_id;
+  const caseRow = await queryOne(pool, "SELECT * FROM recovery_cases WHERE tenant_id = ? AND account_number = ? AND status NOT IN ('closed', 'cancelled') ORDER BY updated_at DESC LIMIT 1", [tenantId, String(req.params.accountNumber).trim()]);
+  if (!caseRow) return res.status(404).json({ error: 'No open case uses this account number.' });
+  const withAgent = await queryOne(pool, 'SELECT 1 FROM case_assignments WHERE case_id = ? AND active = 1 LIMIT 1', [caseRow.id]);
+  if (caseRow.status !== 'imported' || withAgent) return res.status(409).json({ error: 'This case is already with an agent. Manage it in Handoff.' });
+  await query(pool, "UPDATE recovery_cases SET status = 'cancelled', updated_at = ? WHERE id = ? AND tenant_id = ?", [isoNow(), caseRow.id, tenantId]);
+  await addAudit(pool, { tenantId, caseId: caseRow.id, actorUserId: req.apiKey.created_by_user_id, action: 'api.case_cancelled', detail: `${req.apiKey.name} cancelled account ${caseRow.account_number}.` });
+  return res.json({ id: caseRow.id, accountNumber: caseRow.account_number, status: 'cancelled' });
+});
+
+app.get('/api/v1/cases', apiKeyAuth, apiKeyLimiter, async (req, res) => {
+  const status = String(req.query.status || '');
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  const rows = status
+    ? await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? AND status = ? ORDER BY updated_at DESC LIMIT ?', [req.apiKey.tenant_id, status, limit])
+    : await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT ?', [req.apiKey.tenant_id, limit]);
+  res.json({ cases: rows.map((row) => ({ id: row.id, accountNumber: row.account_number, borrowerName: row.borrower_name, registration: row.registration, status: row.status, billingLocked: Boolean(row.billing_locked), createdAt: row.created_at ?? row.updated_at, updatedAt: row.updated_at })) });
 });
 
 app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSIONS.AUTHORITY_APPROVE), async (req, res, next) => {

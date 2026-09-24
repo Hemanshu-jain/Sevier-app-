@@ -6,12 +6,21 @@ import { BILLING_LOCKED_MESSAGE } from './case-actions.mjs';
 
 const headers = ['Account Number', 'Customer Name', 'Mobile Number', 'Address', 'Registration Number', 'Make / Model', 'Vehicle Type', 'Chassis Number', 'Branch', 'Pending Amount', 'Overdue Days'];
 
-function normalize(values) {
-  const { valid, errors } = normalizeImportRows([headers, [
+function accountValues(values) {
+  return [
     values.accountNumber, values.borrowerName, values.borrowerMobile, values.borrowerAddress,
     values.registration, values.makeModel, values.vehicleType, values.chassis, values.branch,
     values.pendingAmount, values.overdueDays,
-  ]]);
+  ].map((value) => (value === undefined || value === null ? '' : String(value)));
+}
+
+// Same validation as a spreadsheet import, for JSON objects (manual form, API). Error rows are 2-based like a sheet.
+export function normalizeAccountRows(list) {
+  return normalizeImportRows([headers, ...list.map(accountValues)]);
+}
+
+function normalize(values) {
+  const { valid, errors } = normalizeAccountRows([values]);
   if (!valid.length) throw new Error(errors[0]?.message || 'Check the account details.');
   return valid[0];
 }

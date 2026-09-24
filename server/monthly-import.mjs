@@ -4,7 +4,7 @@ import { chargeItems } from './billing.mjs';
 
 // import_batches and monthly_account_snapshots (with immutable triggers) live in the migration.
 
-export async function importMonthlyRows({ database, tenantId, actorUserId, snapshotMonth, fileName, fileSha256, rows, rejectedRows, now = new Date() }) {
+export async function importMonthlyRows({ database, tenantId, actorUserId, snapshotMonth, fileName, fileSha256, rows, rejectedRows, itemType = 'case_import', now = new Date() }) {
   if (!/^\d{4}-(?:0[1-9]|1[0-2])-01$/.test(snapshotMonth)) throw new Error('Snapshot month must be the first day of a valid month.');
   if (!rows.length) throw new Error('The import contains no valid rows.');
   const duplicate = await queryOne(database, 'SELECT * FROM import_batches WHERE tenant_id = ? AND file_sha256 = ?', [tenantId, fileSha256]);
@@ -54,7 +54,7 @@ export async function importMonthlyRows({ database, tenantId, actorUserId, snaps
         [snapshotId, tenantId, recoveryCase.id, batchId, snapshotMonth, row.pendingAmountPaise, row.overdueDays, JSON.stringify(row), createdAt]);
       await query(conn, 'UPDATE recovery_cases SET current_snapshot_id = ? WHERE id = ? AND tenant_id = ?', [snapshotId, recoveryCase.id, tenantId]);
       // Every accepted row is billed, re-imports included. Only rows not yet in the field can be locked.
-      billable.push({ itemType: 'case_import', itemId: recoveryCase.id, batchId, lockable: recoveryCase.status === 'imported' });
+      billable.push({ itemType, itemId: recoveryCase.id, batchId, lockable: recoveryCase.status === 'imported' });
     }
     billing = await chargeItems(conn, { tenantId, items: billable, now: createdAt });
   });
