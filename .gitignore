@@ -9,3 +9,7 @@ server/uploads/
 # Detached server run logs
 server-run.log
 server-run.err.log
+
+# Published APK (build output)
+server/downloads/
+keep-alive.log

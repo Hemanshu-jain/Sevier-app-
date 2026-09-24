@@ -1127,6 +1127,9 @@ app.get('/r/:token', verifyPageLimiter, async (req, res) => {
   res.type('html').send(verifyPageHtml({ state, financer, passId, reg }));
 });
 
+// Published agent APK (build output, gitignored): https://<site>/download/handoff-field.apk
+app.use('/download', express.static(join(appDirectory, 'downloads')));
+
 const distDirectory = join(appDirectory, '..', 'dist');
 if (existsSync(distDirectory)) {
   app.use(express.static(distDirectory));

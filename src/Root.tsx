@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { ArrowLeft, ArrowRight, Check, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
 import App from './App';
 import FieldApp from './FieldApp';
@@ -86,6 +87,7 @@ function LoginPage({ onSession }: { onSession: (session: Session) => void }) {
     </form>
     {!challengeId && <button className="text-button auth-switch" type="button" onClick={() => reset(signup ? 'signin' : 'signup')}>{signup ? 'Have an account? Sign in' : 'New field agent? Create an account'}</button>}
     {defaults.showDemoAccounts && !signup && <div className="demo-logins"><p>Local demo accounts</p><button type="button" onClick={() => { setMobile('+91 98450 11111'); reset('signin'); }}>Finance super-admin</button><button type="button" onClick={() => { setMobile('+91 98451 22014'); reset('signin'); }}>Android field agent</button></div>}
+    {!Capacitor.isNativePlatform() && <a className="text-button auth-download" href="/download/handoff-field.apk" download>Field agent? Download the Android app</a>}
     <div className="auth-protection"><ShieldCheck size={15} /> OTP login and revocable sessions enabled</div>
   </section></main>;
 }
