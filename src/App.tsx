@@ -33,15 +33,14 @@ import QRCode from 'qrcode';
 import { caseStatusLabel } from './types';
 import { financeCaseAction } from './finance-case-action';
 import { isActivationKey, isSearchShortcut } from './interaction';
-import { financeReviewCases, recoveryPipeline } from './desktop-metrics';
+import { financeReviewCases } from './desktop-metrics';
 
-type Page = 'dashboard' | 'register' | 'cases' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
+type Page = 'requests' | 'dashboard' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
 type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | 'close' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
+  { id: 'requests', label: 'Requests', icon: ClipboardCheck },
   { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
-  { id: 'register', label: 'Monthly register', icon: ClipboardCheck },
-  { id: 'cases', label: 'Recovery cases', icon: FileText },
   { id: 'agents', label: 'Seizure agents', icon: UsersRound },
   { id: 'custody', label: 'Custody records', icon: PackageCheck },
   { id: 'releases', label: 'Release passes', icon: FileCheck2 },
@@ -55,7 +54,7 @@ const statusStyles: Record<CaseStatus, string> = {
   custody_review: 'amber',
   payment_pending: 'amber',
   payment_confirmed: 'green',
-  release_pass_printed: 'violet',
+  release_pass_printed: 'green',
   closed: 'slate',
   cancelled: 'slate',
 };
@@ -84,7 +83,7 @@ function openRowFromKeyboard(event: ReactKeyboardEvent<HTMLTableRowElement>, onO
 }
 
 function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogout: () => void; onSessionUpdate: (user: Session['user']) => void }) {
-  const [page, setPage] = useState<Page>('dashboard');
+  const [page, setPage] = useState<Page>('requests');
   const [cases, setCases] = useState<RecoveryCase[]>([]);
   const [custody, setCustody] = useState<CustodyRecord[]>([]);
   const [releasePasses, setReleasePasses] = useState<ReleasePass[]>([]);
@@ -109,9 +108,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
 
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
   const unreadCount = appNotifications.filter((item) => !item.read).length;
-  const activeCases = cases.filter((item) => !['imported', 'closed'].includes(item.status));
   const pendingReview = financeReviewCases(cases);
-  const releaseReady = cases.filter((item) => item.status === 'payment_confirmed').length;
   const canViewReports = session.user.permissions.includes('report.export') || session.user.permissions.includes('audit.view');
   const visibleNavigation = navigation.filter((item) => item.id !== 'reports' || canViewReports);
   const now = new Date();
@@ -178,7 +175,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
       setActionNotice('');
       const { result } = await api.importMonthly(session.token, file, `${snapshotMonth}-01`);
       await loadWorkspace();
-      setPage('register');
+      setPage('requests');
       setDialog(null);
       setActionNotice(result.duplicate
         ? 'This file was already imported; no records changed.'
@@ -198,7 +195,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
         : await api.createAccount(session.token, values);
       await loadWorkspace();
       setSelectedCaseId(response.case.id);
-      setPage('register');
+      setPage('requests');
       setDialog(null);
       setActionNotice(dialog === 'edit-account' ? 'Account details were updated.' : 'The account was added for finance review.');
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to save this account.'); }
@@ -385,9 +382,8 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    dashboard: <Dashboard cases={cases} agentList={agentList} activeCases={activeCases} pendingReview={pendingReview} releaseReady={releaseReady} monthLabel={monthLabel} greeting={greeting} userName={session.user.name} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
-    register: <RegisterPage cases={visibleCases} monthLabel={monthLabel} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} canManage={session.user.permissions.includes('account.manage')} onSelectCase={setSelectedCaseId} />,
-    cases: <CasesPage cases={visibleCases} onSelectCase={setSelectedCaseId} />, 
+    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} />,
+    dashboard: <Dashboard cases={cases} agentList={agentList} pendingReview={pendingReview} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
     custody: <CustodyPage custody={custody} cases={cases} session={session} canReview={session.user.permissions.includes('custody.review')} onReviewed={loadWorkspace} onNotice={setActionNotice} onError={setActionError} onSelectCase={setSelectedCaseId} />,
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
@@ -402,7 +398,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
         <div className="brand"><img className="brand-logo" src="/handoff-logo-white.png" alt="Handoff" /></div>
         <div className="workspace-label">{session.user.tenantName}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
+          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'requests' && <b>{cases.length}</b>}</button>)}
         </nav>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={16} /><div><strong>Tenant protected</strong><span>Audit trail is active</span></div></div>
@@ -415,7 +411,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
           <button className="mobile-menu" onClick={() => setMobileNavOpen((value) => !value)} aria-label="Toggle navigation"><Menu size={21} /></button>
           <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' ? `${greeting}, ${session.user.name.split(' ')[0]}` : visibleNavigation.find((item) => item.id === page)?.label ?? page}</h1></div>
           <div className="topbar-actions">
-            <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && !['register', 'cases'].includes(page)) setPage('cases'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
+            <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && page !== 'requests') setPage('requests'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
             <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount > 9 ? '9+' : unreadCount}</b>}</button>
             {session.user.permissions.includes('import.manage') && <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>}
           </div>
@@ -439,35 +435,34 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   );
 }
 
-function Dashboard({ cases, agentList, activeCases, pendingReview, releaseReady, monthLabel, greeting, userName, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; activeCases: RecoveryCase[]; pendingReview: RecoveryCase[]; releaseReady: number; monthLabel: string; greeting: string; userName: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
-  const pendingAmount = activeCases.reduce((sum, item) => sum + item.pendingAmount, 0);
+function monthStartDate() {
+  const start = new Date(); start.setDate(1); start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function applicationCounts(cases: RecoveryCase[]) {
+  const start = monthStartDate();
+  return { thisMonth: cases.filter((item) => new Date(item.createdAt) >= start).length, total: cases.length };
+}
+
+function Dashboard({ cases, agentList, pendingReview, monthLabel, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; pendingReview: RecoveryCase[]; monthLabel: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
+  const counts = applicationCounts(cases);
   const inField = cases.filter((item) => item.status === 'assigned');
-  const activeBranches = new Set(activeCases.map((item) => item.branch)).size;
-  const pipeline = recoveryPipeline(cases);
-  const firstName = userName.split(' ')[0];
+  const recent = [...cases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
   return <>
-    <section className="dash-hero">
-      <div className="dash-hero-lead">
-        <p className="eyebrow light">Finance operations · {monthLabel}</p>
-        <h1>{greeting}, {firstName}.</h1>
-        <p className="dash-hero-sub">{formatCurrency(pendingAmount)} pending across {activeCases.length} open {activeCases.length === 1 ? 'case' : 'cases'} in {activeBranches} branch{activeBranches === 1 ? '' : 'es'}.</p>
-        <div className="dash-hero-actions"><button className="primary-button" onClick={() => onPageChange('register')}><Plus size={15} /> Import monthly file</button><button className="hero-ghost" onClick={() => onPageChange('cases')}>View all cases <ChevronRight size={15} /></button></div>
-      </div>
-      <div className="dash-hero-stat"><span className="eyebrow light">Open recovery cases</span><strong>{activeCases.length}</strong><small>Live across {activeBranches} branch{activeBranches === 1 ? '' : 'es'}</small></div>
+    <div className="page-heading"><div><p className="eyebrow">{monthLabel}</p><h2>Overview</h2><p className="page-copy">Applications are counted when they are created. Field outcomes are tracked per agent.</p></div></div>
+    <section className="count-strip">
+      <div><strong>{counts.thisMonth}</strong><span>Applications this month</span></div>
+      <div><strong>{counts.total}</strong><span>All applications</span></div>
+      <div><strong>{inField.length}</strong><span>With agents now</span></div>
+      <button onClick={() => onPageChange('requests')}><strong>{pendingReview.length}</strong><span>Need finance review</span></button>
     </section>
-    <section className="dash-bento">
-      <button className="bento-tile wide amber" onClick={() => onPageChange('register')}><span className="metric-icon amber"><Clock3 size={20} /></span><div className="bento-body"><p>Need finance review</p><strong>{pendingReview.length}</strong><small>Imports and failed attempts waiting on you</small></div><ChevronRight className="bento-go" size={18} /></button>
-      <div className="bento-tile"><span className="metric-icon blue"><ClipboardCheck size={18} /></span><div className="bento-body"><p>In field now</p><strong>{inField.length}</strong><small>Assigned to agents</small></div></div>
-      <div className="bento-tile"><span className="metric-icon green"><FileCheck2 size={18} /></span><div className="bento-body"><p>Ready for release</p><strong>{releaseReady}</strong><small>Payment confirmed</small></div></div>
-    </section>
-    <section className="workflow-strip"><div><p className="eyebrow">Controlled operating flow</p><h3>Live cases at each recorded lifecycle stage.</h3></div><ol>{pipeline.map((stage) => <li className={stage.count ? 'current' : ''} key={stage.label}><span>{stage.count}</span>{stage.label}</li>)}</ol></section>
     <section className="dashboard-columns">
-      <article className="card case-card"><CardHeading title="Active field work" description="Cases assigned to independent agents" action="View cases" onAction={() => onPageChange('cases')} />
-        <div className="table-scroll"><table><thead><tr><th>Case</th><th>Vehicle</th><th>Assigned agent</th><th>Status</th><th /></tr></thead><tbody>{inField.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td>{agentName(agentList, item.assignedAgentId)}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>)}</tbody></table></div>
+      <article className="card case-card"><CardHeading title="Active field work" description="Applications assigned to independent agents" action="All requests" onAction={() => onPageChange('requests')} />
+        <div className="table-scroll"><table><thead><tr><th>Application</th><th>Vehicle</th><th>Assigned agent</th><th>Status</th><th /></tr></thead><tbody>{inField.length ? inField.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td>{agentName(agentList, item.assignedAgentId)}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={5}><div className="empty-table">No applications are with agents right now.</div></td></tr>}</tbody></table></div>
       </article>
       <aside className="dashboard-side">
-        <article className="card attention-card"><div className="attention-icon"><Bell size={18} /></div><p className="eyebrow">Action needed</p><h3>Review {pendingReview.length} case{pendingReview.length === 1 ? '' : 's'} before the next assignment.</h3><button onClick={() => onPageChange('register')}>Open monthly register <ChevronRight size={15} /></button></article>
-        <article className="card activity-card"><CardHeading title="Recent activity" description="Latest finance and field updates" />{cases.slice(0, 4).map((item) => <div className="activity-row" key={item.id}><span className={`activity-dot ${statusStyles[item.status]}`}><Check size={11} /></span><div><p><strong>{item.id}</strong> · {caseStatusLabel(item.status)}</p><small>{item.updatedAt}</small></div></div>)}</article>
+        <article className="card activity-card"><CardHeading title="Recent activity" description="Latest finance and field updates" />{recent.map((item) => <div className="activity-row" key={item.id}><span className={`activity-dot ${statusStyles[item.status]}`}><Check size={11} /></span><div><p><strong>{item.id}</strong> · {caseStatusLabel(item.status)}</p><small>{new Date(item.updatedAt).toLocaleString('en-IN')}</small></div></div>)}</article>
       </aside>
     </section>
   </>;
@@ -481,14 +476,22 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RegisterPage({ cases, monthLabel, onImport, onAdd, canManage, onSelectCase }: { cases: RecoveryCase[]; monthLabel: string; onImport: () => void; onAdd: () => void; canManage: boolean; onSelectCase: (id: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">{monthLabel} loan cycle</p><h2>Monthly delinquency register</h2><p className="page-copy">Imported borrower and vehicle accounts are reviewed before they become recovery cases.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}<button className="primary-button" onClick={onImport}><Plus size={16} /> Import monthly file</button></div></div><section className="register-band"><div><strong>{cases.length}</strong><span>imported accounts</span></div><div><strong>{formatCurrency(cases.reduce((sum, item) => sum + item.pendingAmount, 0))}</strong><span>visible pending amount</span></div><div><strong>{cases.filter((item) => item.status === 'imported').length}</strong><span>awaiting first review</span></div><p>Only authorized finance users can view this borrower data.</p></section><CaseTable cases={cases} onSelectCase={onSelectCase} showLoan /> <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section></>;
-}
-
-function CasesPage({ cases, onSelectCase }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void }) {
+function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void }) {
   const [status, setStatus] = useState('All');
-  const filtered = status === 'All' ? cases : cases.filter((item) => item.status === status);
-  return <><div className="page-heading"><div><p className="eyebrow">Assigned and active work</p><h2>Recovery cases</h2><p className="page-copy">Open a case to assign an agent, review field evidence, or progress custody and release.</p></div><label className="status-filter">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option>All</option>{Array.from(new Set(cases.map((item) => item.status))).map((item) => <option key={item} value={item}>{caseStatusLabel(item)}</option>)}</select></label></div><CaseTable cases={filtered} onSelectCase={onSelectCase} showLoan /></>;
+  const counts = applicationCounts(allCases);
+  const filtered = (status === 'All' ? cases : cases.filter((item) => item.status === status)).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return <>
+    <div className="page-heading"><div><p className="eyebrow">Vehicle seizure</p><h2>Application requests</h2><p className="page-copy">Each imported or added account is one application. Open it to review, approve authority and assign an agent.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}{canImport && <button className="primary-button" onClick={onImport}><Plus size={16} /> Import file</button>}</div></div>
+    <section className="count-strip">
+      <div><strong>{counts.thisMonth}</strong><span>Applications this month</span></div>
+      <div><strong>{counts.total}</strong><span>All applications</span></div>
+      <div><strong>{allCases.filter((item) => item.status === 'imported').length}</strong><span>Awaiting review</span></div>
+      <div><strong>{allCases.filter((item) => item.status === 'assigned').length}</strong><span>With agents</span></div>
+    </section>
+    <div className="list-toolbar"><label className="status-filter">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option>All</option>{Array.from(new Set(allCases.map((item) => item.status))).map((item) => <option key={item} value={item}>{caseStatusLabel(item)}</option>)}</select></label></div>
+    <CaseTable cases={filtered} onSelectCase={onSelectCase} showLoan />
+    <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section>
+  </>;
 }
 
 function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void; showLoan: boolean }) {
@@ -496,7 +499,7 @@ function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; o
 }
 
 function AgentsPage({ agents, groups, cases, session, canManage, onAdd, onChangeStatus, onSelectCase, onGroupsChanged, onNotice, onError }: { agents: Agent[]; groups: AgentGroup[]; cases: RecoveryCase[]; session: Session; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void; onGroupsChanged: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>completed this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section>{canManage && <GroupsPanel groups={groups} agents={agents} session={session} onChanged={onGroupsChanged} onNotice={onNotice} onError={onError} />}</>;
+  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>jobs submitted this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section>{canManage && <GroupsPanel groups={groups} agents={agents} session={session} onChanged={onGroupsChanged} onNotice={onNotice} onError={onError} />}</>;
 }
 
 // Agent groups: build a named set of roster agents, then send one message that reaches each member individually.

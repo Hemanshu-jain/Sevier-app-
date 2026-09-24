@@ -57,7 +57,7 @@ mkdirSync(uploadDirectory, { recursive: true });
 // tunnel), where per-IP limiting would falsely throttle the whole group.
 // For a real proxied deployment also set `app.set('trust proxy', 1)` so req.ip is the client's.
 const passThroughLimiter = (_req, _res, next) => next();
-const otpLimiter = config.nodeEnv === 'production' ? rateLimit({ windowMs: 15 * 60 * 1000, max: 25 }) : passThroughLimiter;
+const otpLimiter = config.nodeEnv === 'production' ? rateLimit({ windowMs: 5 * 60 * 1000, max: 25 }) : passThroughLimiter;
 const verifyPageLimiter = config.nodeEnv === 'production' ? rateLimit({ windowMs: 60 * 1000, max: 60 }) : passThroughLimiter;
 
 const isoNow = () => new Date().toISOString();
@@ -117,6 +117,7 @@ function mapCase(row, assignedAgents = []) {
     assignedAt: row.assigned_at ?? undefined,
     assignmentNote: row.assignment_note ?? undefined,
     updatedAt: row.updated_at,
+    createdAt: row.created_at ?? row.updated_at,
     custodyId: row.custody_id ?? undefined,
     failure: row.failure_reason ? { reason: row.failure_reason, note: row.failure_note, recordedAt: row.failure_recorded_at } : undefined,
     paymentCleared: Boolean(row.payment_cleared),
@@ -288,7 +289,7 @@ app.get('/api/me', auth, (req, res) => res.json({ user: req.user }));
 
 app.post('/api/auth/logout', auth, async (req, res) => {
   await query(pool, 'UPDATE auth_sessions SET revoked_at = ? WHERE id = ?', [isoNow(), req.sessionId]);
-  await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'auth.logout', detail: 'Signed out and revoked the active session.' });
+  if (req.user.tenantId) await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'auth.logout', detail: 'Signed out and revoked the active session.' });
   res.status(204).end();
 });
 
@@ -302,15 +303,14 @@ app.get('/api/workspace', auth, async (req, res) => {
     ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE case_id IN (?) ORDER BY created_at DESC', [visibleCaseIds]) : [])
     : await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC', [req.user.tenantId]);
   const agentRows = isAgent ? [] : await query(pool, "SELECT users.id, users.name, users.mobile, users.city, m.active FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? ORDER BY users.name", [req.user.tenantId]);
-  // Active count per agent from live co-assignments; completed uses the primary/legacy pointer as a rough monthly proxy.
+  // Active count per agent from live co-assignments.
   const assignmentCounts = isAgent ? [] : await query(pool, "SELECT ca.agent_user_id AS id, COUNT(*) AS n FROM case_assignments ca JOIN recovery_cases rc ON rc.id = ca.case_id WHERE ca.tenant_id = ? AND ca.active = 1 AND rc.status <> 'closed' GROUP BY ca.agent_user_id", [req.user.tenantId]);
   const activeByAgent = new Map(assignmentCounts.map((row) => [row.id, row.n]));
   const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0);
-  const monthStartIso = monthStart.toISOString();
-  const agentData = agentRows.map((agent) => {
-    const completed = caseRows.filter((item) => item.assigned_agent_user_id === agent.id && item.status === 'closed' && item.updated_at >= monthStartIso).length;
-    return mapAgent(agent, activeByAgent.get(agent.id) ?? 0, completed);
-  });
+  // Per-entry platform: count field outcomes the agent submitted this month, not closures.
+  const submittedCounts = isAgent ? [] : await query(pool, "SELECT actor_user_id AS id, COUNT(*) AS n FROM audit_events WHERE tenant_id = ? AND action IN ('attempt.failed', 'custody.created', 'verification.submitted') AND created_at >= ? GROUP BY actor_user_id", [req.user.tenantId, monthStart.toISOString()]);
+  const submittedByAgent = new Map(submittedCounts.map((row) => [row.id, row.n]));
+  const agentData = agentRows.map((agent) => mapAgent(agent, activeByAgent.get(agent.id) ?? 0, submittedByAgent.get(agent.id) ?? 0));
   const notificationRows = await listNotifications(pool, req.user);
   const releasePassRows = isAgent ? [] : await query(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC', [req.user.tenantId]);
   const eventRows = isAgent ? [] : await query(pool, 'SELECT release_pass_id, event FROM release_pass_events WHERE tenant_id = ?', [req.user.tenantId]);

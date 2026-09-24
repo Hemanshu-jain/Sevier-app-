@@ -37,9 +37,9 @@ export async function importMonthlyRows({ database, tenantId, actorUserId, snaps
       } else {
         const caseId = `RC-${snapshotMonth.slice(2, 7).replace('-', '')}-${randomUUID().slice(0, 6).toUpperCase()}`;
         await query(conn,
-          `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, payment_cleared)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, 0)`,
-          [caseId, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, createdAt]);
+          `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, created_at, payment_cleared)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, ?, 0)`,
+          [caseId, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, createdAt, createdAt]);
         recoveryCase = { id: caseId };
         created += 1;
       }

@@ -8,9 +8,9 @@ export async function requestSignInOtp({ database, otpProvider, mobile, requestI
   const user = await queryOne(database, 'SELECT id FROM users WHERE mobile_e164 = ? AND active = 1', [mobileE164]);
   if (!user) throw new Error('No active account uses this mobile number.');
 
-  const since = new Date(now.getTime() - 15 * 60_000).toISOString();
+  const since = new Date(now.getTime() - 5 * 60_000).toISOString();
   const recent = (await queryOne(database, 'SELECT COUNT(*) AS count FROM otp_challenges WHERE mobile_e164 = ? AND requested_at >= ?', [mobileE164, since])).count;
-  if (recent >= 5) throw new Error('Too many OTP requests. Try again in 15 minutes.');
+  if (recent >= 5) throw new Error('Too many OTP requests. Try again in 5 minutes.');
 
   const providerResult = await otpProvider.send(mobileE164);
   const challengeId = randomUUID();
@@ -49,9 +49,9 @@ export async function requestSignUpOtp({ database, otpProvider, mobile, requestI
   if (await queryOne(database, 'SELECT id FROM users WHERE mobile_e164 = ?', [mobileE164])) {
     throw new Error('This mobile already has an account. Sign in instead.');
   }
-  const since = new Date(now.getTime() - 15 * 60_000).toISOString();
+  const since = new Date(now.getTime() - 5 * 60_000).toISOString();
   const recent = (await queryOne(database, 'SELECT COUNT(*) AS count FROM otp_challenges WHERE mobile_e164 = ? AND requested_at >= ?', [mobileE164, since])).count;
-  if (recent >= 5) throw new Error('Too many OTP requests. Try again in 15 minutes.');
+  if (recent >= 5) throw new Error('Too many OTP requests. Try again in 5 minutes.');
 
   const providerResult = await otpProvider.send(mobileE164);
   const challengeId = randomUUID();

@@ -5,3 +5,7 @@ server/data/*.db-*
 server/backups/
 server/uploads/
 .env
+
+# Detached server run logs
+server-run.log
+server-run.err.log
