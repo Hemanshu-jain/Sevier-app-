@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeImportRows } from './import-parser.mjs';
-import { query, queryOne } from './mysql.mjs';
+import { query, queryOne, tx } from './mysql.mjs';
+import { chargeItems } from './billing.mjs';
+import { BILLING_LOCKED_MESSAGE } from './case-actions.mjs';
 
 const headers = ['Account Number', 'Customer Name', 'Mobile Number', 'Address', 'Registration Number', 'Make / Model', 'Vehicle Type', 'Chassis Number', 'Branch', 'Pending Amount', 'Overdue Days'];
 
@@ -24,16 +26,20 @@ async function rejectDuplicate(database, tenantId, row, excludeId = '') {
 export async function createAccount({ database, tenantId, values, id = `RC-${new Date().toISOString().slice(2, 7).replace('-', '')}-${randomUUID().slice(0, 6).toUpperCase()}`, now = new Date().toISOString() }) {
   const row = normalize(values);
   await rejectDuplicate(database, tenantId, row);
-  await query(database,
+  const billing = await tx(database, async (conn) => {
+    await query(conn,
     `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, created_at, payment_cleared)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, ?, 0)`,
     [id, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, now, now]);
-  return { id, accountNumber: row.accountNumber, registration: row.registration };
+    return chargeItems(conn, { tenantId, items: [{ itemType: 'case_manual', itemId: id, lockable: true }], now });
+  });
+  return { id, accountNumber: row.accountNumber, registration: row.registration, billing };
 }
 
 export async function updateAccount({ database, tenantId, caseId, values, now = new Date().toISOString() }) {
   const current = await queryOne(database, 'SELECT * FROM recovery_cases WHERE id = ? AND tenant_id = ?', [caseId, tenantId]);
   if (!current) throw new Error('Account not found.');
+  if (current.billing_locked) throw new Error(BILLING_LOCKED_MESSAGE);
   if (current.status !== 'imported') throw new Error('Only unassigned imported accounts can be edited.');
   if (current.authority_approved_at) throw new Error('Revoke the approved authority before changing account or vehicle details.');
   const row = normalize(values);

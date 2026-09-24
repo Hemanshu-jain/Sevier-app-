@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateCaseAction } from '../server/case-actions.mjs';
+import { BILLING_LOCKED_MESSAGE, validateCaseAction } from '../server/case-actions.mjs';
 
 test('assignment requires finance authority approval', () => {
   const imported = { status: 'imported', authority_approved_at: null };
@@ -27,4 +27,11 @@ test('release issuance and closure keep their financial gates', () => {
   assert.equal(validateCaseAction('issue_release', { status: 'payment_confirmed', payment_cleared: 1 }), null);
   assert.match(validateCaseAction('close', { status: 'payment_confirmed', release_pass_id: null }), /release pass/i);
   assert.equal(validateCaseAction('close', { status: 'release_pass_printed', release_pass_id: 'RP-1' }), null);
+});
+
+test('a billing-locked record blocks every finance action until recharged', () => {
+  const locked = { status: 'imported', authority_approved_at: '2026-09-01T00:00:00.000Z', billing_locked: 1 };
+  assert.equal(validateCaseAction('approve_authority', locked, { hasDocument: true }), BILLING_LOCKED_MESSAGE);
+  assert.equal(validateCaseAction('assign', locked), BILLING_LOCKED_MESSAGE);
+  assert.equal(validateCaseAction('assign', { ...locked, billing_locked: 0 }), null);
 });

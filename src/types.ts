@@ -47,6 +47,7 @@ export interface RecoveryCase {
   assignmentNote?: string;
   updatedAt: string;
   createdAt: string;
+  billingLocked?: boolean;
   custodyId?: string;
   failure?: { reason: AttemptReason; note: string; recordedAt: string };
   paymentCleared?: boolean;

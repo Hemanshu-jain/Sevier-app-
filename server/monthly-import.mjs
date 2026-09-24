@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { query, queryOne, tx } from './mysql.mjs';
+import { chargeItems } from './billing.mjs';
 
 // import_batches and monthly_account_snapshots (with immutable triggers) live in the migration.
 
@@ -13,6 +14,8 @@ export async function importMonthlyRows({ database, tenantId, actorUserId, snaps
   const createdAt = now.toISOString();
   let created = 0;
   let updated = 0;
+  let billing;
+  const billable = [];
 
   await tx(database, async (conn) => {
     await query(conn,
@@ -40,7 +43,7 @@ export async function importMonthlyRows({ database, tenantId, actorUserId, snaps
           `INSERT INTO recovery_cases (id, tenant_id, account_number, borrower_name, borrower_mobile, borrower_address, registration, make_model, chassis, vehicle_type, branch, pending_amount, overdue_days, status, updated_at, created_at, payment_cleared)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, ?, 0)`,
           [caseId, tenantId, row.accountNumber, row.borrowerName, row.borrowerMobile, row.borrowerAddress, row.registration, row.makeModel, row.chassis, row.vehicleType, row.branch, row.pendingAmountPaise, row.overdueDays, createdAt, createdAt]);
-        recoveryCase = { id: caseId };
+        recoveryCase = { id: caseId, status: 'imported' };
         created += 1;
       }
 
@@ -50,8 +53,11 @@ export async function importMonthlyRows({ database, tenantId, actorUserId, snaps
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [snapshotId, tenantId, recoveryCase.id, batchId, snapshotMonth, row.pendingAmountPaise, row.overdueDays, JSON.stringify(row), createdAt]);
       await query(conn, 'UPDATE recovery_cases SET current_snapshot_id = ? WHERE id = ? AND tenant_id = ?', [snapshotId, recoveryCase.id, tenantId]);
+      // Every accepted row is billed, re-imports included. Only rows not yet in the field can be locked.
+      billable.push({ itemType: 'case_import', itemId: recoveryCase.id, batchId, lockable: recoveryCase.status === 'imported' });
     }
+    billing = await chargeItems(conn, { tenantId, items: billable, now: createdAt });
   });
 
-  return { batchId, accepted: rows.length, rejected: rejectedRows, created, updated, duplicate: false };
+  return { batchId, accepted: rows.length, rejected: rejectedRows, created, updated, duplicate: false, billing };
 }

@@ -1,7 +1,7 @@
 import type { Agent, AgentGroup, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import { apiUrl } from './api-origin.ts';
 
-export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent';
+export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent' | 'platform_admin';
 
 export interface SessionUser {
   id: string;
@@ -43,6 +43,52 @@ export interface ImportResult {
   created: number;
   updated: number;
   duplicate: boolean;
+  billing?: ChargeSummary;
+}
+
+export interface ChargeSummary {
+  paid: number;
+  pending: number;
+  amountPaidPaise: number;
+  amountDuePaise: number;
+}
+
+export interface Topup {
+  id: string;
+  tenantId: string;
+  tenantName?: string;
+  amountPaise: number;
+  reference: string;
+  status: 'pending' | 'confirmed' | 'rejected';
+  requestedBy?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface BillingSummary {
+  balancePaise: number;
+  duePaise: number;
+  lockedCount: number;
+  month: { count: number; amountPaise: number };
+  allTime: { count: number; amountPaise: number };
+  prices: { vehicleRowPaise: number; verificationFeePaise: number };
+  paymentInstructions: string;
+  topupAmountsPaise: number[];
+  imports: Array<{ id: string; fileName: string; snapshotMonth: string; createdAt: string; rowsCharged: number; amountPaise: number; pendingRows: number }>;
+  charges: Array<{ id: number; itemType: string; itemId: string; amountPaise: number; status: 'paid' | 'pending'; createdAt: string; paidAt?: string }>;
+  topups: Topup[];
+}
+
+export interface PlatformSettings {
+  vehicleRowPaise: number;
+  verificationFeePaise: number;
+  paymentInstructions: string;
+}
+
+export interface PlatformOverview {
+  topups: Topup[];
+  tenants: Array<{ id: string; name: string; balancePaise: number; duePaise: number; lockedCount: number; chargedCount: number }>;
+  settings: PlatformSettings;
 }
 
 export interface ImportError {
@@ -168,6 +214,11 @@ export const api = {
   closeCase: (token: string, caseId: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/close`, { method: 'POST' }, token),
   revokeReleasePass: (token: string, caseId: string, reason: string) => request<{ ok: boolean }>(`/api/cases/${caseId}/release-revocation`, { method: 'POST', body: JSON.stringify({ reason }) }, token),
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
+  billing: (token: string) => request<BillingSummary>('/api/billing', {}, token),
+  requestTopup: (token: string, amountPaise: number, reference: string) => request<{ topup: Topup }>('/api/billing/topups', { method: 'POST', body: JSON.stringify({ amountPaise, reference }) }, token),
+  platformOverview: (token: string) => request<PlatformOverview>('/api/platform/overview', {}, token),
+  decideTopup: (token: string, topupId: string, decision: 'confirm' | 'reject') => request<{ settled: number }>(`/api/platform/topups/${topupId}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }, token),
+  updatePlatformSettings: (token: string, values: { vehicleRowRupees: number; verificationFeeRupees: number; paymentInstructions: string }) => request<{ settings: PlatformSettings }>('/api/platform/settings', { method: 'PUT', body: JSON.stringify(values) }, token),
   evidence: (token: string, caseId: string) => request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, {}, token),
   evidenceFile: async (token: string, evidenceId: string) => {
     const response = await fetch(apiUrl(`/api/evidence/${evidenceId}/file`, import.meta.env.VITE_API_ORIGIN), { headers: { Authorization: `Bearer ${token}` } });

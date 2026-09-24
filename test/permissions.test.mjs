@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PERMISSIONS, ROLE_TEMPLATES, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
+import { PERMISSIONS, PLATFORM_MANAGE, ROLE_TEMPLATES, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
 
 test('owner template receives every permission', () => {
   assert.deepEqual(new Set(ROLE_TEMPLATES.owner), new Set(Object.values(PERMISSIONS)));
@@ -35,4 +35,11 @@ test('legacy demo roles resolve to the matching permission template', () => {
   assert.equal(permissionsForRole('finance_staff'), ROLE_TEMPLATES.staff);
   assert.equal(permissionsForRole('agent'), ROLE_TEMPLATES.agent);
   assert.deepEqual(permissionsForRole('unknown'), []);
+});
+
+test('only the platform operator can manage the platform', () => {
+  assert.deepEqual(permissionsForRole('platform_admin'), [PLATFORM_MANAGE]);
+  for (const role of ['super_admin', 'finance_manager', 'finance_staff', 'agent']) assert.equal(hasPermission(permissionsForRole(role), PLATFORM_MANAGE), false);
+  assert.equal(hasPermission(ROLE_TEMPLATES.manager, PERMISSIONS.BILLING_MANAGE), true);
+  assert.equal(hasPermission(ROLE_TEMPLATES.staff, PERMISSIONS.BILLING_MANAGE), false);
 });

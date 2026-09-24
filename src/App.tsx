@@ -11,6 +11,7 @@ import {
   FileText,
   Gauge,
   LayoutDashboard,
+  Lock,
   LogOut,
   MapPin,
   Menu,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   Trash2,
   UsersRound,
+  Wallet,
   X,
 } from 'lucide-react';
 import { api } from './api';
@@ -34,8 +36,9 @@ import { caseStatusLabel } from './types';
 import { financeCaseAction } from './finance-case-action';
 import { isActivationKey, isSearchShortcut } from './interaction';
 import { financeReviewCases } from './desktop-metrics';
+import BillingPage, { rupees } from './BillingPage';
 
-type Page = 'requests' | 'dashboard' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
+type Page = 'requests' | 'dashboard' | 'billing' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
 type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | 'close' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
@@ -45,6 +48,7 @@ const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard 
   { id: 'custody', label: 'Custody records', icon: PackageCheck },
   { id: 'releases', label: 'Release passes', icon: FileCheck2 },
   { id: 'reports', label: 'Reports & audit', icon: Gauge },
+  { id: 'billing', label: 'Billing & wallet', icon: Wallet },
 ];
 
 const statusStyles: Record<CaseStatus, string> = {
@@ -115,7 +119,8 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   const unreadCount = appNotifications.filter((item) => !item.read).length;
   const pendingReview = financeReviewCases(cases);
   const canViewReports = session.user.permissions.includes('report.export') || session.user.permissions.includes('audit.view');
-  const visibleNavigation = navigation.filter((item) => item.id !== 'reports' || canViewReports);
+  const canBill = session.user.permissions.includes('billing.manage');
+  const visibleNavigation = navigation.filter((item) => (item.id !== 'reports' || canViewReports) && (item.id !== 'billing' || canBill));
   const now = new Date();
   const dateLabel = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -184,7 +189,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
       setDialog(null);
       setActionNotice(result.duplicate
         ? 'This file was already imported; no records changed.'
-        : `${result.accepted} accounts processed: ${result.created} new, ${result.updated} updated${result.rejected ? `, ${result.rejected} rejected` : ''}.`);
+        : `${result.accepted} accounts processed: ${result.created} new, ${result.updated} updated${result.rejected ? `, ${result.rejected} rejected` : ''}.${result.billing?.pending ? ` ${result.billing.pending} locked until your wallet is recharged (${rupees(result.billing.amountDuePaise)} due).` : ''}`);
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to import the register.'); }
   }
 
@@ -199,10 +204,10 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
         ? await api.updateAccount(session.token, selectedCase.id, values)
         : await api.createAccount(session.token, values);
       await loadWorkspace();
-      setSelectedCaseId(response.case.id);
+      if (!response.case.billingLocked) setSelectedCaseId(response.case.id);
       setPage('requests');
       setDialog(null);
-      setActionNotice(dialog === 'edit-account' ? 'Account details were updated.' : 'The account was added for finance review.');
+      setActionNotice(dialog === 'edit-account' ? 'Account details were updated.' : response.case.billingLocked ? 'The account was added but is locked until your wallet is recharged.' : 'The account was added for finance review.');
     } catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to save this account.'); }
   }
 
@@ -387,7 +392,8 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} />,
+    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} onOpenBilling={canBill ? () => setPage('billing') : undefined} />,
+    billing: <BillingPage session={session} />,
     dashboard: <Dashboard cases={cases} agentList={agentList} pendingReview={pendingReview} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
     custody: <CustodyPage custody={custody} cases={cases} session={session} canReview={session.user.permissions.includes('custody.review')} onReviewed={loadWorkspace} onNotice={setActionNotice} onError={setActionError} onSelectCase={setSelectedCaseId} />,
@@ -481,7 +487,8 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void }) {
+function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase, onOpenBilling }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void; onOpenBilling?: () => void }) {
+  const lockedCount = allCases.filter((item) => item.billingLocked).length;
   const [status, setStatus] = useState('All');
   const counts = applicationCounts(allCases);
   const filtered = (status === 'All' ? cases : cases.filter((item) => item.status === status)).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -493,6 +500,7 @@ function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, 
       <div><strong>{allCases.filter((item) => item.status === 'imported').length}</strong><span>Awaiting review</span></div>
       <div><strong>{allCases.filter((item) => item.status === 'assigned').length}</strong><span>With agents</span></div>
     </section>
+    {lockedCount > 0 && <div className="locked-banner"><Lock size={16} /><span>{lockedCount} application{lockedCount === 1 ? ' is' : 's are'} locked until your wallet is recharged. They unlock automatically, oldest first.</span>{onOpenBilling && <button className="secondary-button" onClick={onOpenBilling}>Recharge wallet</button>}</div>}
     <div className="list-toolbar"><label className="status-filter">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option>All</option>{Array.from(new Set(allCases.map((item) => item.status))).map((item) => <option key={item} value={item}>{caseStatusLabel(item)}</option>)}</select></label></div>
     <CaseTable cases={filtered} onSelectCase={onSelectCase} showLoan />
     <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section>
@@ -500,7 +508,7 @@ function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, 
 }
 
 function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; onSelectCase: (id: string) => void; showLoan: boolean }) {
-  return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.length ? cases.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={showLoan ? 7 : 6}><div className="empty-table">No cases match this view.</div></td></tr>}</tbody></table></div></article>;
+  return <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Borrower</th><th>Mobile</th><th>Vehicle</th><th>Registration</th>{showLoan && <th>Pending amount</th>}<th>Status</th><th /></tr></thead><tbody>{cases.length ? cases.map((item) => item.billingLocked ? <tr key={item.id} className="row-locked" aria-disabled="true" title="Locked until the wallet is recharged"><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><span className="lock-badge"><Lock size={12} /> Locked</span></td><td /></tr> : <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id} · {item.branch}</small></td><td className="mono">{item.borrower.mobile}</td><td>{item.vehicle.makeModel}<small>{item.vehicle.type}</small></td><td className="mono">{item.vehicle.registration}</td>{showLoan && <td className="amount">{formatCurrency(item.pendingAmount)}<small>{item.overdueDays} days overdue</small></td>}<td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={showLoan ? 7 : 6}><div className="empty-table">No cases match this view.</div></td></tr>}</tbody></table></div></article>;
 }
 
 function AgentsPage({ agents, groups, cases, session, canManage, onAdd, onChangeStatus, onSelectCase, onGroupsChanged, onNotice, onError }: { agents: Agent[]; groups: AgentGroup[]; cases: RecoveryCase[]; session: Session; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void; onGroupsChanged: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void }) {

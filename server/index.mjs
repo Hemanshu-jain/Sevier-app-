@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,8 @@ import { isAllowedAuthorityDocument, isAllowedEvidenceFile } from './file-valida
 import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from './otp-service.mjs';
 import { requestSignInOtp, verifySignInOtp, requestSignUpOtp, verifySignUpOtp } from './otp-auth.mjs';
 import { hashSessionToken } from './session-token.mjs';
-import { PERMISSIONS, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
+import { PERMISSIONS, PLATFORM_MANAGE, hasPermission, permissionsForRole } from '../shared/contracts.mjs';
+import { billingSummary, decideTopup, mapTopup, platformSettings, requestTopup } from './billing.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
@@ -118,6 +119,7 @@ function mapCase(row, assignedAgents = []) {
     assignmentNote: row.assignment_note ?? undefined,
     updatedAt: row.updated_at,
     createdAt: row.created_at ?? row.updated_at,
+    billingLocked: Boolean(row.billing_locked),
     custodyId: row.custody_id ?? undefined,
     failure: row.failure_reason ? { reason: row.failure_reason, note: row.failure_note, recordedAt: row.failure_recorded_at } : undefined,
     paymentCleared: Boolean(row.payment_cleared),
@@ -495,12 +497,70 @@ app.post('/api/imports/monthly', auth, requirePermission(PERMISSIONS.IMPORT_MANA
       rows: normalized.valid,
       rejectedRows: normalized.errors.length,
     });
-    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'import.completed', detail: `${req.file.originalname}: ${result.accepted} accepted, ${result.rejected} rejected.` });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'import.completed', detail: `${req.file.originalname}: ${result.accepted} accepted, ${result.rejected} rejected.${result.billing ? ` Billed ${result.billing.paid}, locked ${result.billing.pending} awaiting recharge.` : ''}` });
     await addNotification(pool, { tenantId: req.user.tenantId, title: result.duplicate ? 'Monthly file already imported' : 'Monthly file imported', detail: `${result.accepted} account${result.accepted === 1 ? '' : 's'} processed for ${snapshotMonth.slice(0, 7)}.`, tone: result.rejected ? 'amber' : 'blue' });
     return res.status(result.duplicate ? 200 : 201).json({ result, errors: normalized.errors });
   } catch (error) {
     return next(error);
   }
+});
+
+app.get('/api/billing', auth, requirePermission(PERMISSIONS.BILLING_MANAGE), async (req, res) => {
+  res.json(await billingSummary(pool, req.user.tenantId));
+});
+
+app.post('/api/billing/topups', auth, requirePermission(PERMISSIONS.BILLING_MANAGE), async (req, res) => {
+  try {
+    const topup = await requestTopup({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, amountPaise: req.body?.amountPaise, reference: req.body?.reference });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'billing.topup_requested', detail: `Requested a ₹${topup.amountPaise / 100} wallet recharge (reference ${topup.reference}).` });
+    return res.status(201).json({ topup });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The recharge request could not be saved.' });
+  }
+});
+
+const requirePlatform = requirePermission(PLATFORM_MANAGE);
+
+app.get('/api/platform/overview', auth, requirePlatform, async (_req, res) => {
+  const topups = await query(pool, `SELECT t.*, tenants.name AS tenant_name, users.name AS requested_by_name FROM topup_requests t
+    JOIN tenants ON tenants.id = t.tenant_id JOIN users ON users.id = t.requested_by_user_id
+    ORDER BY t.status = 'pending' DESC, t.created_at DESC LIMIT 200`);
+  const tenants = await query(pool, `SELECT tenants.id, tenants.name, COALESCE(w.balance_paise, 0) AS balance_paise,
+      COALESCE(SUM(CASE WHEN c.status = 'pending' THEN c.amount_paise END), 0) AS due_paise,
+      COALESCE(SUM(c.status = 'pending'), 0) AS locked_count, COUNT(c.id) AS charged_count
+    FROM tenants LEFT JOIN wallets w ON w.tenant_id = tenants.id LEFT JOIN billing_charges c ON c.tenant_id = tenants.id
+    GROUP BY tenants.id, tenants.name, w.balance_paise ORDER BY tenants.name`);
+  const settings = await platformSettings(pool);
+  res.json({
+    topups: topups.map(mapTopup),
+    tenants: tenants.map((row) => ({ id: row.id, name: row.name, balancePaise: Number(row.balance_paise), duePaise: Number(row.due_paise), lockedCount: Number(row.locked_count), chargedCount: Number(row.charged_count) })),
+    settings: { vehicleRowPaise: Number(settings.vehicle_row_paise), verificationFeePaise: Number(settings.verification_fee_paise), paymentInstructions: settings.payment_instructions ?? '' },
+  });
+});
+
+app.post('/api/platform/topups/:id/decision', auth, requirePlatform, async (req, res) => {
+  const approve = req.body?.decision === 'confirm';
+  if (!approve && req.body?.decision !== 'reject') return res.status(422).json({ error: 'Choose confirm or reject.' });
+  try {
+    const result = await decideTopup({ database: pool, topupId: req.params.id, adminUserId: req.user.id, approve });
+    await addAudit(pool, { tenantId: result.tenantId, actorUserId: req.user.id, action: approve ? 'billing.topup_confirmed' : 'billing.topup_rejected', detail: approve ? `Wallet recharge confirmed; ${result.settled} pending charge(s) settled.` : 'Wallet recharge request rejected.' });
+    await addNotification(pool, { tenantId: result.tenantId, title: approve ? 'Wallet recharged' : 'Recharge request rejected', detail: approve ? `Your recharge was confirmed. ${result.settled} locked record(s) were unlocked.` : 'Your recharge could not be verified. Contact support with your payment reference.', tone: approve ? 'green' : 'red' });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The top-up could not be decided.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+app.put('/api/platform/settings', auth, requirePlatform, async (req, res) => {
+  const vehicleRowPaise = Math.round(Number(req.body?.vehicleRowRupees) * 100);
+  const verificationFeePaise = Math.round(Number(req.body?.verificationFeeRupees) * 100);
+  const paymentInstructions = String(req.body?.paymentInstructions ?? '').trim();
+  const validPrice = (value) => Number.isInteger(value) && value >= 0 && value <= 10_000_000;
+  if (!validPrice(vehicleRowPaise) || !validPrice(verificationFeePaise)) return res.status(422).json({ error: 'Prices must be between ₹0 and ₹1,00,000.' });
+  if (paymentInstructions.length > 2000) return res.status(422).json({ error: 'Keep payment instructions within 2,000 characters.' });
+  await query(pool, 'UPDATE platform_settings SET vehicle_row_paise = ?, verification_fee_paise = ?, payment_instructions = ?, updated_at = ? WHERE id = 1', [vehicleRowPaise, verificationFeePaise, paymentInstructions || null, isoNow()]);
+  res.json({ settings: { vehicleRowPaise, verificationFeePaise, paymentInstructions } });
 });
 
 app.post('/api/cases/:id/authority-approval', auth, requirePermission(PERMISSIONS.AUTHORITY_APPROVE), async (req, res, next) => {
@@ -846,4 +906,19 @@ app.use((error, _req, res, _next) => {
 
 await migrate(pool);
 if (config.nodeEnv !== 'production') await seedDevData(pool);
+await ensurePlatformAdmin(process.env.PLATFORM_ADMIN_MOBILE);
+
+// The platform operator (who confirms wallet top-ups) is bootstrapped from .env, never self-registered.
+async function ensurePlatformAdmin(mobile) {
+  if (!mobile) return;
+  const mobileE164 = normalizeIndiaMobile(mobile);
+  const existing = await queryOne(pool, 'SELECT id, role FROM users WHERE mobile_e164 = ?', [mobileE164]);
+  if (existing) {
+    if (existing.role !== 'platform_admin') console.error(`PLATFORM_ADMIN_MOBILE already belongs to a ${existing.role} account; platform admin was not created.`);
+    return;
+  }
+  const id = `platform-${randomUUID()}`;
+  await query(pool, "INSERT INTO users (id, tenant_id, role, name, email, password_hash, mobile, city, active, mobile_e164, onboarding_complete, created_via) VALUES (?, NULL, 'platform_admin', 'Platform admin', ?, 'otp-only', ?, '', 1, ?, 1, 'platform')",
+    [id, `${id}@handoff.invalid`, formatMobile(mobileE164), mobileE164]);
+}
 app.listen(port, config.listenHost, () => console.log(`Handoff API listening on http://${config.listenHost}:${port}`));

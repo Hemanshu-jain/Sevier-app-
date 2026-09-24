@@ -1,4 +1,8 @@
+export const BILLING_LOCKED_MESSAGE = 'This record is locked until your wallet is recharged.';
+
 export function validateCaseAction(action, recoveryCase, context = {}) {
+  // Unpaid records exist but can't be worked on until a top-up settles their charge.
+  if (recoveryCase.billing_locked) return BILLING_LOCKED_MESSAGE;
   switch (action) {
     case 'approve_authority':
       if (recoveryCase.status !== 'imported') return 'Only an imported case can receive authority approval.';

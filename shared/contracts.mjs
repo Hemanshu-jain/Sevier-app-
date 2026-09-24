@@ -40,7 +40,11 @@ export const PERMISSIONS = Object.freeze({
   REPORT_EXPORT: 'report.export',
   AUDIT_VIEW: 'audit.view',
   RETENTION_MANAGE: 'retention.manage',
+  BILLING_MANAGE: 'billing.manage',
 });
+
+// Operator-only permission: deliberately outside the tenant PERMISSIONS set so no finance role can hold it.
+export const PLATFORM_MANAGE = 'platform.manage';
 
 export const ROLE_TEMPLATES = Object.freeze({
   owner: Object.freeze(Object.values(PERMISSIONS)),
@@ -60,6 +64,7 @@ export const ROLE_TEMPLATES = Object.freeze({
     PERMISSIONS.RELEASE_CLOSE,
     PERMISSIONS.REPORT_EXPORT,
     PERMISSIONS.AUDIT_VIEW,
+    PERMISSIONS.BILLING_MANAGE,
   ]),
   staff: Object.freeze([
     PERMISSIONS.IMPORT_MANAGE,
@@ -71,6 +76,7 @@ export const ROLE_TEMPLATES = Object.freeze({
     PERMISSIONS.ATTEMPT_SUBMIT,
     PERMISSIONS.CUSTODY_SUBMIT,
   ]),
+  platform: Object.freeze([PLATFORM_MANAGE]),
 });
 
 export function hasPermission(permissions, permission) {
@@ -82,6 +88,7 @@ const legacyRoles = Object.freeze({
   finance_manager: 'manager',
   finance_staff: 'staff',
   agent: 'agent',
+  platform_admin: 'platform',
 });
 
 export function permissionsForRole(role) {

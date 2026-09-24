@@ -5,6 +5,12 @@ import { query } from '../server/mysql.mjs';
 import { migratedPool, makeTenant, uid, skipWithoutDb } from './mysql-helpers.mjs';
 
 const skip = skipWithoutDb;
+// A funded wallet keeps new accounts unlocked; locking itself is covered in billing.test.mjs.
+async function fundedTenant(pool) {
+  const tenantId = await makeTenant(pool);
+  await query(pool, 'INSERT INTO wallets (tenant_id, balance_paise, updated_at) VALUES (?, 1000000, ?)', [tenantId, '2026-08-27T00:00:00.000Z']);
+  return tenantId;
+}
 const values = {
   accountNumber: 'LN-5001', borrowerName: 'Anita Rao', borrowerMobile: '9876543210', borrowerAddress: 'Pune',
   registration: 'mh 12 ab 1234', makeModel: 'Tata Nexon', vehicleType: '4W', chassis: 'MAT123', branch: 'Pune',
@@ -14,10 +20,10 @@ const values = {
 test('creates a validated manual account and rejects open duplicates', { skip }, async () => {
   const pool = await migratedPool();
   try {
-    const tenantId = await makeTenant(pool);
+    const tenantId = await fundedTenant(pool);
     const caseId = uid('case');
     const created = await createAccount({ database: pool, tenantId, values, id: caseId, now: '2026-08-27T10:00:00.000Z' });
-    assert.deepEqual(created, { id: caseId, accountNumber: 'LN-5001', registration: 'MH 12 AB 1234' });
+    assert.deepEqual({ ...created, billing: created.billing.paid }, { id: caseId, accountNumber: 'LN-5001', registration: 'MH 12 AB 1234', billing: 1 });
     assert.equal((await query(pool, 'SELECT pending_amount FROM recovery_cases WHERE id = ?', [caseId]))[0].pending_amount, 8450000);
     await assert.rejects(createAccount({ database: pool, tenantId, values: { ...values, registration: 'MH 12 ZZ 9999' } }), /account number/i);
   } finally {
@@ -28,7 +34,7 @@ test('creates a validated manual account and rejects open duplicates', { skip },
 test('edits only imported accounts that have no approved authority', { skip }, async () => {
   const pool = await migratedPool();
   try {
-    const tenantId = await makeTenant(pool);
+    const tenantId = await fundedTenant(pool);
     const caseId = uid('case');
     await createAccount({ database: pool, tenantId, values, id: caseId });
     await updateAccount({ database: pool, tenantId, caseId, values: { ...values, pendingAmount: '80000', overdueDays: '70' } });

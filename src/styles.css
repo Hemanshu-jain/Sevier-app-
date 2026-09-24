@@ -183,5 +183,17 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 .count-strip strong{font-size:24px;letter-spacing:-.5px;color:var(--ink)}.count-strip span{font-size:12px;color:var(--muted);font-weight:600}
 .list-toolbar{display:flex;justify-content:flex-end;margin-bottom:10px}
 .maps-link{display:inline-flex;align-items:center;gap:5px;margin-top:6px;text-decoration:none}
+.row-locked td{color:#98a2b3;background:#fafafa;cursor:not-allowed}.row-locked td strong{color:#98a2b3}
+.lock-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--muted);border:1px dashed #cfd4dc;border-radius:6px;padding:3px 7px;white-space:nowrap}
+.locked-banner{display:flex;align-items:center;gap:10px;border:1px solid #ecd9b8;background:var(--amber-soft);color:var(--amber);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-weight:600}.locked-banner span{flex:1}
+.recharge-form{display:grid;gap:12px;margin-top:12px}.recharge-options{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.recharge-option{border:1px solid var(--line);background:#fff;border-radius:8px;padding:14px 16px;text-align:left;display:grid;gap:2px}.recharge-option strong{font-size:18px;color:var(--ink)}.recharge-option small{color:var(--muted)}
+.recharge-option.selected{border-color:var(--blue);background:var(--blue-soft)}
+.payment-instructions{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:var(--page)}.payment-instructions p:last-child{margin:4px 0 0;white-space:pre-wrap}
+.settings-block h3{display:flex;align-items:center;gap:8px;margin:0}
+.platform-shell{min-height:100vh;background:var(--page)}.platform-header{display:flex;align-items:center;gap:14px;background:var(--navy);color:#fff;padding:14px 24px}.platform-header span{flex:1;font-weight:700}.platform-header .text-button{color:#fff;display:inline-flex;align-items:center;gap:6px}
+.platform-main{max-width:1120px;margin:0 auto;padding:24px 16px;display:grid;gap:16px}.platform-main .count-strip{margin-bottom:0}
+.row-buttons{display:flex;gap:8px;justify-content:flex-end}
+@media(max-width:760px){.recharge-options{grid-template-columns:1fr}}
 th{font-size:11px;letter-spacing:.3px}
 @media(max-width:760px){.count-strip{grid-template-columns:repeat(2,1fr)}.count-strip>:nth-child(2){border-right:0}.count-strip>:nth-child(-n+2){border-bottom:1px solid var(--line)}}

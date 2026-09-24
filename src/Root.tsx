@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react';
 import App from './App';
 import FieldApp from './FieldApp';
+import PlatformApp from './PlatformApp';
 import { api, clearSession, saveSession, storedSession } from './api';
 import type { Session, SessionUser } from './api';
 import { loginDefaults } from './runtime-mode';
@@ -35,6 +36,7 @@ function Root() {
   if (session.user.role === 'agent' && session.user.onboardingComplete === false) {
     return <OnboardingWizard session={session} onDone={(user) => apply({ ...session, user })} onLogout={logout} />;
   }
+  if (session.user.role === 'platform_admin') return <PlatformApp session={session} onLogout={logout} />;
   const onSessionUpdate = (user: Session['user']) => apply({ ...session, user });
   return session.user.role === 'agent' ? <FieldApp session={session} onLogout={logout} onSessionUpdate={onSessionUpdate} /> : <App session={session} onLogout={logout} onSessionUpdate={onSessionUpdate} />;
 }
