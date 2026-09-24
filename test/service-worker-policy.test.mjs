@@ -16,3 +16,8 @@ test('offline cache never stores authenticated API or evidence responses', () =>
   assert.equal(shouldCacheRequest({ method: 'GET', url: `${origin}/api/workspace`, origin }), false);
   assert.equal(shouldCacheRequest({ method: 'GET', url: `${origin}/api/evidence/ev-1/file`, origin }), false);
 });
+
+test('the service worker never intercepts file downloads such as the agent APK', () => {
+  const origin = 'https://handoff.example';
+  assert.equal(shouldCacheRequest({ method: 'GET', url: `${origin}/download/handoff-field.apk`, origin }), false);
+});

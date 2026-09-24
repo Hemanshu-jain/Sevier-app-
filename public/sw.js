@@ -1,6 +1,6 @@
 import { shouldCacheRequest } from './sw-policy.mjs';
 
-const CACHE_NAME = 'handoff-field-v2';
+const CACHE_NAME = 'handoff-field-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(
