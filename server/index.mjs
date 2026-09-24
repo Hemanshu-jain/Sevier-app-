@@ -21,7 +21,7 @@ import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } f
 import { createAccount, updateAccount } from './account-management.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
-import { validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
+import { readLocation, validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
 import { persistCustody, persistReleasePass } from './workflow-persistence.mjs';
 import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from './field-mutations.mjs';
 import { listNotifications, markNotificationsRead } from './notification-access.mjs';
@@ -129,7 +129,7 @@ function mapCase(row, assignedAgents = []) {
 }
 
 function mapCustody(row) {
-  return { id: row.id, caseId: row.case_id, vehicleCondition: 'Verified', yardName: row.yard_name, arrivalTime: row.arrival_time, parkingRate: row.parking_rate, createdAt: row.created_at, agentName: row.agent_name, checklist: row.checklist_count, inspection: parseJson(row.inspection_json), customNote: row.custom_note ?? undefined, financeReviewedAt: row.finance_reviewed_at ?? undefined, financeReviewNote: row.finance_review_note ?? undefined };
+  return { id: row.id, caseId: row.case_id, vehicleCondition: 'Verified', yardName: row.yard_name, arrivalTime: row.arrival_time, parkingRate: row.parking_rate, createdAt: row.created_at, agentName: row.agent_name, checklist: row.checklist_count, inspection: parseJson(row.inspection_json), customNote: row.custom_note ?? undefined, financeReviewedAt: row.finance_reviewed_at ?? undefined, financeReviewNote: row.finance_review_note ?? undefined, latitude: row.latitude ?? undefined, longitude: row.longitude ?? undefined };
 }
 
 function mapNotification(row) {
@@ -596,8 +596,12 @@ app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_
     deleteUploads(files);
     return res.status(422).json({ error: 'Upload valid JPG, PNG, WebP, MP4, or WebM evidence files only.' });
   }
-  const latitude = Number(req.body?.latitude);
-  const longitude = Number(req.body?.longitude);
+  const location = readLocation(req.body);
+  if (location.error) {
+    deleteUploads(files);
+    return res.status(422).json({ error: location.error });
+  }
+  const { latitude, longitude } = location;
   const capturedAt = String(req.body?.capturedAt || isoNow());
   if (Number.isNaN(Date.parse(capturedAt))) {
     deleteUploads(files);
@@ -609,7 +613,7 @@ app.post('/api/cases/:id/evidence', auth, requirePermission(PERMISSIONS.CUSTODY_
       for (const file of files) {
         const id = `ev-${crypto.randomUUID()}`;
         await query(conn, 'INSERT INTO evidence (id, tenant_id, case_id, agent_user_id, file_name, original_name, mime_type, byte_size, latitude, longitude, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [id, req.recoveryCase.tenant_id, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, Number.isFinite(latitude) ? latitude : null, Number.isFinite(longitude) ? longitude : null, capturedAt]);
+          [id, req.recoveryCase.tenant_id, req.recoveryCase.id, req.user.id, file.filename, file.originalname, file.mimetype, file.size, latitude, longitude, capturedAt]);
         records.push(mapEvidence(await queryOne(conn, 'SELECT * FROM evidence WHERE id = ?', [id])));
       }
       await addAudit(conn, { tenantId: req.recoveryCase.tenant_id, caseId: req.recoveryCase.id, actorUserId: req.user.id, action: 'evidence.uploaded', detail: `${records.length} field evidence file(s) captured.` });
@@ -648,14 +652,15 @@ app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_S
   const evidenceCount = (await queryOne(pool, 'SELECT COUNT(*) AS count FROM evidence WHERE tenant_id = ? AND case_id = ?', [caseRow.tenant_id, caseRow.id])).count;
   const validationError = validateCustody(caseRow, { yardName, arrivalTime, parkingRate, checklist, inspection, evidenceCount, customNote });
   if (validationError) return res.status(422).json({ error: validationError });
+  const location = readLocation(req.body);
+  if (location.error) return res.status(422).json({ error: location.error });
+  const { latitude, longitude } = location;
   const id = `CT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const createdAt = isoNow();
-  const latitude = Number(req.body?.latitude);
-  const longitude = Number(req.body?.longitude);
-  const locationDetail = Number.isFinite(latitude) && Number.isFinite(longitude) ? ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.` : '';
+  const locationDetail = ` GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.`;
   try {
     const body = await tx(pool, async (conn) => {
-      await persistCustody(conn, { id, tenantId: caseRow.tenant_id, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote });
+      await persistCustody(conn, { id, tenantId: caseRow.tenant_id, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote, latitude, longitude });
       await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
       await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
       const response = { case: mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), custody: mapCustody(await queryOne(conn, 'SELECT * FROM custody_records WHERE id = ?', [id])) };

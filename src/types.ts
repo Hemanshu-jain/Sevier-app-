@@ -70,6 +70,8 @@ export interface CustodyRecord {
   customNote?: string;
   financeReviewedAt?: string;
   financeReviewNote?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface AgentGroup {

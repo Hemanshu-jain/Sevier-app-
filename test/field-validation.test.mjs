@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAttempt, validateCustody, validateFieldCase } from '../server/field-validation.mjs';
+import { readLocation, validateAttempt, validateCustody, validateFieldCase } from '../server/field-validation.mjs';
 
 const activeCase = { status: 'assigned' };
 
@@ -24,4 +24,13 @@ test('custody requires evidence and the complete known inspection checklist', ()
   assert.match(validateCustody(activeCase, { ...values, inspection: { ...inspection, Battery: 'Unknown' } }), /condition check/i);
   assert.equal(validateCustody(activeCase, { ...values, customNote: 'Left mirror scratched.' }), null);
   assert.match(validateCustody(activeCase, { ...values, customNote: 'x'.repeat(2001) }), /note/i);
+});
+
+test('field submissions require a real GPS fix', () => {
+  assert.deepEqual(readLocation({ latitude: '12.9716', longitude: '77.5946' }), { latitude: 12.9716, longitude: 77.5946 });
+  assert.ok(readLocation({}).error, 'missing location is rejected');
+  assert.ok(readLocation({ latitude: '', longitude: '' }).error, 'blank values must not coerce to 0,0');
+  assert.ok(readLocation({ latitude: 'abc', longitude: '77' }).error);
+  assert.ok(readLocation({ latitude: 91, longitude: 77 }).error, 'latitude out of range');
+  assert.ok(readLocation({ latitude: 12, longitude: 181 }).error, 'longitude out of range');
 });

@@ -8,10 +8,10 @@ import { query } from './mysql.mjs';
 
 export async function persistCustody(executor, record) {
   await query(executor,
-    `INSERT INTO custody_records (id, tenant_id, case_id, yard_name, arrival_time, parking_rate, created_at, agent_name, checklist_count, inspection_json, custom_note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO custody_records (id, tenant_id, case_id, yard_name, arrival_time, parking_rate, created_at, agent_name, checklist_count, inspection_json, custom_note, latitude, longitude)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [record.id, record.tenantId, record.caseId, record.yardName, record.arrivalTime, record.parkingRate,
-     record.createdAt, record.agentName, record.checklist, JSON.stringify(record.inspection), record.customNote || null]);
+     record.createdAt, record.agentName, record.checklist, JSON.stringify(record.inspection), record.customNote || null, record.latitude ?? null, record.longitude ?? null]);
   const result = await query(executor,
     "UPDATE recovery_cases SET status = 'custody_review', custody_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?",
     [record.id, record.createdAt, record.caseId, record.tenantId]);

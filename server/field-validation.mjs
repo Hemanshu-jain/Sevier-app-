@@ -26,3 +26,12 @@ export function validateCustody(recoveryCase, { yardName, arrivalTime, parkingRa
   if (String(customNote || '').length > 2000) return 'Keep the custom note within 2,000 characters.';
   return null;
 }
+
+// Field submissions must carry a real GPS fix. Blank values would coerce to 0,0, so reject them explicitly.
+export function readLocation(body) {
+  const raw = [body?.latitude, body?.longitude];
+  if (raw.some((value) => value === undefined || value === null || String(value).trim() === '')) return { error: 'Capture your GPS location before submitting.' };
+  const [latitude, longitude] = raw.map(Number);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return { error: 'The GPS location is invalid. Capture it again.' };
+  return { latitude, longitude };
+}
