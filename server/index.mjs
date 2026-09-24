@@ -29,6 +29,9 @@ import { createReleaseSigner } from './release-signing.mjs';
 import { rateLimit } from './rate-limit.mjs';
 
 const app = express();
+// Behind Cloudflare (tunnel or proxied DNS): trust the proxy so req.ip is the real client
+// IP (from X-Forwarded-For) instead of the local hop, which per-IP rate limiting relies on.
+app.set('trust proxy', true);
 const config = loadConfig();
 const port = config.port;
 const pool = createPool(config.databaseUrl);
