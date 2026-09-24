@@ -35,7 +35,7 @@ export async function createAgent({ database, tenantId, values, addedByUserId = 
 export async function searchAgentDirectory({ database, tenantId, q = '' }) {
   const like = `%${String(q).trim()}%`;
   const rows = await query(database,
-    `SELECT users.id, users.name, users.mobile, users.city, users.created_via,
+    `SELECT users.id, users.name, users.mobile, users.city, users.created_via, users.rate_vehicle_paise, users.rate_verification_paise,
        CASE WHEN m.agent_user_id IS NULL THEN 0 ELSE m.active END AS linked
      FROM users
      LEFT JOIN agent_memberships m ON m.agent_user_id = users.id AND m.tenant_id = ?
@@ -43,7 +43,13 @@ export async function searchAgentDirectory({ database, tenantId, q = '' }) {
        AND (users.name LIKE ? OR users.mobile LIKE ? OR users.city LIKE ? OR users.mobile_e164 LIKE ?)
      ORDER BY users.name LIMIT 25`,
     [tenantId, like, like, like, like]);
-  return rows.map((row) => ({ id: row.id, name: row.name, mobile: row.mobile, city: row.city, createdVia: row.created_via, linked: Boolean(row.linked) }));
+  return rows.map((row) => ({ id: row.id, name: row.name, mobile: row.mobile, city: row.city, createdVia: row.created_via, linked: Boolean(row.linked), rates: agentRates(row) }));
+}
+
+// Agent's advertised prices in rupees (null = not set). Agents are paid outside the app.
+export function agentRates(row) {
+  const rupees = (paise) => (paise === null || paise === undefined ? null : Number(paise) / 100);
+  return { vehicle: rupees(row.rate_vehicle_paise), verification: rupees(row.rate_verification_paise) };
 }
 
 // Add an existing directory agent to this financer's roster (idempotent; reactivates if removed).

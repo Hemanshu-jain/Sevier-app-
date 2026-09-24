@@ -1,3 +1,17 @@
+// Financers choose per case whether the assigned agent sees customer and vehicle details.
+// Enforced here on every agent-facing response, never only in the UI. Registration always stays visible.
+export function redactForAgent(item) {
+  const { customer, vehicle } = item.agentVisibility;
+  return {
+    ...item,
+    accountNumber: customer ? item.accountNumber : '',
+    borrower: customer ? item.borrower : { name: item.borrower.name, mobile: '', address: '' },
+    pendingAmount: customer ? item.pendingAmount : 0,
+    overdueDays: customer ? item.overdueDays : 0,
+    vehicle: vehicle ? item.vehicle : { ...item.vehicle, makeModel: '', chassis: '' },
+  };
+}
+
 export const BILLING_LOCKED_MESSAGE = 'This record is locked until your wallet is recharged.';
 
 export function validateCaseAction(action, recoveryCase, context = {}) {

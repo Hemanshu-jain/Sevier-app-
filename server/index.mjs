@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createPool, migrate, query, queryOne, tx } from './mysql.mjs';
 import { seedDevData } from './seed-dev.mjs';
 import { loadConfig } from './config.mjs';
-import { validateCaseAction } from './case-actions.mjs';
+import { redactForAgent, validateCaseAction } from './case-actions.mjs';
 import { isAllowedAuthorityDocument, isAllowedEvidenceFile } from './file-validation.mjs';
 import { createDevelopmentOtpService, createOtpService, normalizeIndiaMobile } from './otp-service.mjs';
 import { requestSignInOtp, verifySignInOtp, requestSignUpOtp, verifySignUpOtp } from './otp-auth.mjs';
@@ -17,7 +17,8 @@ import { PERMISSIONS, PLATFORM_MANAGE, hasPermission, permissionsForRole } from 
 import { billingSummary, decideTopup, mapTopup, platformSettings, requestTopup } from './billing.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
-import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
+import { agentRates, createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
+import { rateAgent, ratingSummaries } from './agent-ratings.mjs';
 import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
 import { createAccount, normalizeAccountRows, updateAccount } from './account-management.mjs';
 import { createApiKey, findActiveApiKey, listApiKeys, revokeApiKey } from './api-keys.mjs';
@@ -101,7 +102,7 @@ app.use(cors({ origin: true, credentials: false }));
 app.use(express.json({ limit: '2mb' }));
 
 function apiUser(row) {
-  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete) };
+  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete), ...(row.role === 'agent' ? { rates: agentRates(row) } : {}) };
 }
 
 function mapCase(row, assignedAgents = []) {
@@ -121,6 +122,8 @@ function mapCase(row, assignedAgents = []) {
     updatedAt: row.updated_at,
     createdAt: row.created_at ?? row.updated_at,
     billingLocked: Boolean(row.billing_locked),
+    agentVisibility: { customer: row.share_customer !== 0, vehicle: row.share_vehicle !== 0 },
+    finance: row.finance_company ? { company: row.finance_company, contactName: row.finance_contact_name ?? undefined, contactMobile: row.finance_contact_mobile ? formatMobile(row.finance_contact_mobile) : undefined } : undefined,
     custodyId: row.custody_id ?? undefined,
     failure: row.failure_reason ? { reason: row.failure_reason, note: row.failure_note, recordedAt: row.failure_recorded_at } : undefined,
     paymentCleared: Boolean(row.payment_cleared),
@@ -143,8 +146,8 @@ function mapEvidence(row) {
   return { id: row.id, caseId: row.case_id, originalName: row.original_name, mimeType: row.mime_type, byteSize: row.byte_size, latitude: row.latitude, longitude: row.longitude, capturedAt: row.captured_at, agentName: row.agent_name ?? undefined };
 }
 
-function mapAgent(row, activeCases = 0, completedThisMonth = 0) {
-  return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth, status: row.active ? 'Active' : 'Suspended' };
+function mapAgent(row, activeCases = 0, completedThisMonth = 0, rating = null) {
+  return { id: row.id, name: row.name, mobile: row.mobile, city: row.city, activeCases, completedThisMonth, status: row.active ? 'Active' : 'Suspended', rating, rates: agentRates(row) };
 }
 
 function mapReleasePass(row, lifecycle = 'valid') {
@@ -283,10 +286,21 @@ app.put('/api/profile', auth, async (req, res) => {
   const idProof = String(req.body?.idProof || '').trim();
   // ID proof is required to finish onboarding; a later settings edit may omit it (the existing value is kept).
   if (req.user.role === 'agent' && req.user.onboardingComplete === false && idProof.length < 4) return res.status(422).json({ error: 'Add a valid ID proof reference.' });
-  await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END WHERE id = ?", [name, city, idProof, req.user.id]);
+  const rates = req.user.role === 'agent' ? [parseRate(req.body?.rateVehicle), parseRate(req.body?.rateVerification)] : [undefined, undefined];
+  if (rates.some(Number.isNaN)) return res.status(422).json({ error: 'Rates must be between ₹0 and ₹1,00,000.' });
+  await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END, rate_vehicle_paise = CASE WHEN ? THEN ? ELSE rate_vehicle_paise END, rate_verification_paise = CASE WHEN ? THEN ? ELSE rate_verification_paise END WHERE id = ?",
+    [name, city, idProof, rates[0] !== undefined, rates[0] ?? null, rates[1] !== undefined, rates[1] ?? null, req.user.id]);
   const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [req.user.id]);
   return res.json({ user: apiUser(user) });
 });
+
+// Rupees -> paise. undefined = leave unchanged, blank = clear, NaN = invalid.
+function parseRate(value) {
+  if (value === undefined) return undefined;
+  if (value === null || String(value).trim() === '') return null;
+  const paise = Math.round(Number(value) * 100);
+  return Number.isInteger(paise) && paise >= 0 && paise <= 10_000_000 ? paise : NaN;
+}
 
 app.get('/api/me', auth, (req, res) => res.json({ user: req.user }));
 
@@ -299,13 +313,15 @@ app.post('/api/auth/logout', auth, async (req, res) => {
 app.get('/api/workspace', auth, async (req, res) => {
   const isAgent = req.user.role === 'agent';
   const caseRows = isAgent
-    ? await query(pool, 'SELECT rc.* FROM recovery_cases rc JOIN case_assignments ca ON ca.case_id = rc.id AND ca.agent_user_id = ? AND ca.active = 1 ORDER BY rc.updated_at DESC', [req.user.id])
+    ? await query(pool, `SELECT rc.*, t.name AS finance_company, fu.name AS finance_contact_name, fu.mobile AS finance_contact_mobile
+        FROM recovery_cases rc JOIN case_assignments ca ON ca.case_id = rc.id AND ca.agent_user_id = ? AND ca.active = 1
+        JOIN tenants t ON t.id = rc.tenant_id LEFT JOIN users fu ON fu.id = ca.assigned_by_user_id ORDER BY rc.updated_at DESC`, [req.user.id])
     : await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? ORDER BY updated_at DESC', [req.user.tenantId]);
   const visibleCaseIds = caseRows.map((row) => row.id);
   const custodyRows = isAgent
     ? (visibleCaseIds.length ? await query(pool, 'SELECT * FROM custody_records WHERE case_id IN (?) ORDER BY created_at DESC', [visibleCaseIds]) : [])
     : await query(pool, 'SELECT * FROM custody_records WHERE tenant_id = ? ORDER BY created_at DESC', [req.user.tenantId]);
-  const agentRows = isAgent ? [] : await query(pool, "SELECT users.id, users.name, users.mobile, users.city, m.active FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? ORDER BY users.name", [req.user.tenantId]);
+  const agentRows = isAgent ? [] : await query(pool, "SELECT users.id, users.name, users.mobile, users.city, users.rate_vehicle_paise, users.rate_verification_paise, m.active FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? ORDER BY users.name", [req.user.tenantId]);
   // Active count per agent from live co-assignments.
   const assignmentCounts = isAgent ? [] : await query(pool, "SELECT ca.agent_user_id AS id, COUNT(*) AS n FROM case_assignments ca JOIN recovery_cases rc ON rc.id = ca.case_id WHERE ca.tenant_id = ? AND ca.active = 1 AND rc.status <> 'closed' GROUP BY ca.agent_user_id", [req.user.tenantId]);
   const activeByAgent = new Map(assignmentCounts.map((row) => [row.id, row.n]));
@@ -313,17 +329,18 @@ app.get('/api/workspace', auth, async (req, res) => {
   // Per-entry platform: count field outcomes the agent submitted this month, not closures.
   const submittedCounts = isAgent ? [] : await query(pool, "SELECT actor_user_id AS id, COUNT(*) AS n FROM audit_events WHERE tenant_id = ? AND action IN ('attempt.failed', 'custody.created', 'verification.submitted') AND created_at >= ? GROUP BY actor_user_id", [req.user.tenantId, monthStart.toISOString()]);
   const submittedByAgent = new Map(submittedCounts.map((row) => [row.id, row.n]));
-  const agentData = agentRows.map((agent) => mapAgent(agent, activeByAgent.get(agent.id) ?? 0, submittedByAgent.get(agent.id) ?? 0));
+  const ratings = await ratingSummaries(pool, agentRows.map((agent) => agent.id));
+  const agentData = agentRows.map((agent) => mapAgent(agent, activeByAgent.get(agent.id) ?? 0, submittedByAgent.get(agent.id) ?? 0, ratings.get(agent.id) ?? null));
   const notificationRows = await listNotifications(pool, req.user);
   const releasePassRows = isAgent ? [] : await query(pool, 'SELECT release_passes.*, users.name AS issued_by_name FROM release_passes LEFT JOIN users ON users.id = release_passes.issued_by_user_id WHERE release_passes.tenant_id = ? ORDER BY release_passes.issued_at DESC', [req.user.tenantId]);
   const eventRows = isAgent ? [] : await query(pool, 'SELECT release_pass_id, event FROM release_pass_events WHERE tenant_id = ?', [req.user.tenantId]);
   const lifecycleByPass = new Map();
   for (const row of eventRows) if (row.event === 'revoked' || !lifecycleByPass.get(row.release_pass_id)) lifecycleByPass.set(row.release_pass_id, row.event); // revoked wins
-  const assignmentRows = isAgent ? [] : await query(pool, 'SELECT ca.case_id, ca.agent_user_id, users.name FROM case_assignments ca JOIN users ON users.id = ca.agent_user_id WHERE ca.tenant_id = ? AND ca.active = 1', [req.user.tenantId]);
+  const assignmentRows = isAgent ? [] : await query(pool, "SELECT ca.case_id, ca.agent_user_id, users.name, r.stars FROM case_assignments ca JOIN users ON users.id = ca.agent_user_id LEFT JOIN agent_ratings r ON r.tenant_id = ca.tenant_id AND r.job_type = 'case' AND r.job_id = ca.case_id AND r.agent_user_id = ca.agent_user_id WHERE ca.tenant_id = ? AND ca.active = 1", [req.user.tenantId]);
   const agentsByCase = new Map();
-  for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name }); agentsByCase.set(row.case_id, list); }
+  for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name, stars: row.stars ?? undefined }); agentsByCase.set(row.case_id, list); }
   const groups = isAgent ? [] : await listGroups({ database: pool, tenantId: req.user.tenantId });
-  res.json({ cases: caseRows.map((row) => mapCase(row, agentsByCase.get(row.id) || [])), custody: custodyRows.map(mapCustody), agents: agentData, groups, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
+  res.json({ cases: caseRows.map((row) => { const item = mapCase(row, agentsByCase.get(row.id) || []); return isAgent ? redactForAgent(item) : item; }), custody: custodyRows.map(mapCustody), agents: agentData, groups, notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -350,7 +367,8 @@ app.put('/api/agents/:id/status', auth, requirePermission(PERMISSIONS.AGENT_MANA
 
 app.get('/api/agents/directory', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
   const agents = await searchAgentDirectory({ database: pool, tenantId: req.user.tenantId, q: String(req.query?.q || '') });
-  res.json({ agents });
+  const ratings = await ratingSummaries(pool, agents.map((agent) => agent.id));
+  res.json({ agents: agents.map((agent) => ({ ...agent, rating: ratings.get(agent.id) ?? null })) });
 });
 
 app.post('/api/agents/:id/link', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -564,6 +582,28 @@ app.put('/api/platform/settings', auth, requirePlatform, async (req, res) => {
   res.json({ settings: { vehicleRowPaise, verificationFeePaise, paymentInstructions } });
 });
 
+app.put('/api/cases/:id/agent-visibility', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const { customer, vehicle } = req.body ?? {};
+  if (typeof customer !== 'boolean' || typeof vehicle !== 'boolean') return res.status(422).json({ error: 'Choose what the agent can see.' });
+  await query(pool, 'UPDATE recovery_cases SET share_customer = ?, share_vehicle = ?, updated_at = ? WHERE id = ? AND tenant_id = ?', [customer ? 1 : 0, vehicle ? 1 : 0, isoNow(), caseRow.id, req.user.tenantId]);
+  await addAudit(pool, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.visibility_changed', detail: `Agent sees customer details: ${customer ? 'yes' : 'no'}; vehicle details: ${vehicle ? 'yes' : 'no'}.` });
+  res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
+});
+
+app.post('/api/ratings', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
+  const caseRow = await caseForUser(String(req.body?.caseId || ''), req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  try {
+    const rating = await rateAgent({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, caseId: caseRow.id, agentId: String(req.body?.agentId || ''), stars: req.body?.stars, comment: req.body?.comment });
+    await addAudit(pool, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'agent.rated', detail: `Rated the agent ${rating.stars}/5 for this case.` });
+    return res.status(201).json({ rating });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The rating could not be saved.' });
+  }
+});
+
 // ---- API keys: management (tenant owner) and the external v1 API ----
 app.get('/api/api-keys', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
   res.json({ keys: await listApiKeys(pool, req.user.tenantId) });
@@ -727,7 +767,7 @@ app.post('/api/cases/:id/attempt', auth, requirePermission(PERMISSIONS.ATTEMPT_S
       [reason, note, updatedAt, updatedAt, caseRow.id, caseRow.tenant_id]);
     await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Recovery attempt could not be completed', detail: `${caseRow.id} was marked ${reason.toLowerCase()} by ${req.user.name}.`, tone: 'amber' });
     await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'attempt.failed', detail: `${reason}: ${note}${locationDetail}` });
-    const response = { case: mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) };
+    const response = { case: redactForAgent(mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id]))) };
     await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 200, body: response, createdAt: updatedAt });
     return response;
   });
@@ -808,7 +848,7 @@ app.post('/api/cases/:id/custody', auth, requirePermission(PERMISSIONS.CUSTODY_S
       await persistCustody(conn, { id, tenantId: caseRow.tenant_id, caseId: caseRow.id, yardName, arrivalTime, parkingRate, createdAt, agentName: req.user.name, checklist, inspection, customNote, latitude, longitude });
       await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Custody report submitted', detail: `${caseRow.id} was submitted by ${req.user.name} and is awaiting finance review.`, tone: 'green' });
       await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'custody.created', detail: `Created ${id} at ${yardName}.${locationDetail}` });
-      const response = { case: mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), custody: mapCustody(await queryOne(conn, 'SELECT * FROM custody_records WHERE id = ?', [id])) };
+      const response = { case: redactForAgent(mapCase(await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id]))), custody: mapCustody(await queryOne(conn, 'SELECT * FROM custody_records WHERE id = ?', [id])) };
       await saveFieldMutation(conn, { ...req.fieldMutation, statusCode: 201, body: response, createdAt });
       return response;
     });

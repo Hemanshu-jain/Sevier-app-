@@ -341,8 +341,11 @@ function FieldApp({ session, onLogout: finishLogout, onSessionUpdate }: { sessio
       <section className="field-case">
         <FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} />
         <div className="field-status"><span>{readOnly ? finalQueued ? 'QUEUED FOR SYNC' : 'REPORT SUBMITTED' : 'FINANCE ASSIGNED'}</span><small>Updated {new Date(selected.updatedAt).toLocaleString()}</small></div>
-        <div className="field-vehicle-head"><span>{selected.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><h1>{selected.vehicle.registration}</h1><p>{selected.vehicle.makeModel}</p></div></div>
-        <section className="field-info-card"><p className="field-label">Customer and loan information</p><div className="field-person"><strong>{selected.borrower.name}</strong><span>{selected.borrower.mobile}</span></div><p className="field-address"><MapPinned size={15} /> {selected.borrower.address}</p><div className="field-loan-grid"><span><small>Account</small><strong>{selected.accountNumber}</strong></span><span><small>Pending amount</small><strong>₹{selected.pendingAmount.toLocaleString('en-IN')}</strong></span><span><small>Overdue</small><strong>{selected.overdueDays} days</strong></span><span><small>Chassis no.</small><strong>{selected.vehicle.chassis.slice(-8)}</strong></span></div><div className="field-quick-actions"><a href={`tel:${selected.borrower.mobile.replaceAll(' ', '')}`}><Phone size={15} /> Call customer</a><a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selected.borrower.address)}`} target="_blank" rel="noreferrer"><MapPinned size={15} /> Open address</a></div></section>
+        <div className="field-vehicle-head"><span>{selected.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><h1>{selected.vehicle.registration}</h1><p>{selected.agentVisibility?.vehicle === false ? 'Vehicle details hidden by financer' : selected.vehicle.makeModel}</p></div></div>
+        {selected.finance && <section className="field-info-card"><p className="field-label">Finance company</p><div className="field-person"><strong>{selected.finance.company}</strong><span>{selected.finance.contactName ?? 'Finance team'}{selected.finance.contactMobile ? ` · ${selected.finance.contactMobile}` : ''}</span></div>{selected.finance.contactMobile && <div className="field-quick-actions"><a href={`tel:${selected.finance.contactMobile.replaceAll(' ', '')}`}><Phone size={15} /> Call financer</a></div>}</section>}
+        {selected.agentVisibility?.customer === false
+          ? <section className="field-info-card"><p className="field-label">Customer and loan information</p><div className="field-person"><strong>{selected.borrower.name}</strong><span>Contact, address and loan details are hidden by the financer. Call the financer for directions.</span></div>{selected.agentVisibility?.vehicle !== false && <div className="field-loan-grid"><span><small>Chassis no.</small><strong>{selected.vehicle.chassis.slice(-8)}</strong></span></div>}</section>
+          : <section className="field-info-card"><p className="field-label">Customer and loan information</p><div className="field-person"><strong>{selected.borrower.name}</strong><span>{selected.borrower.mobile}</span></div><p className="field-address"><MapPinned size={15} /> {selected.borrower.address}</p><div className="field-loan-grid"><span><small>Account</small><strong>{selected.accountNumber}</strong></span><span><small>Pending amount</small><strong>₹{selected.pendingAmount.toLocaleString('en-IN')}</strong></span><span><small>Overdue</small><strong>{selected.overdueDays} days</strong></span><span><small>Chassis no.</small><strong>{selected.agentVisibility?.vehicle === false ? 'Hidden' : selected.vehicle.chassis.slice(-8)}</strong></span></div><div className="field-quick-actions"><a href={`tel:${selected.borrower.mobile.replaceAll(' ', '')}`}><Phone size={15} /> Call customer</a><a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selected.borrower.address)}`} target="_blank" rel="noreferrer"><MapPinned size={15} /> Open address</a></div></section>}
         {selected.assignmentNote && <section className="field-instruction"><ShieldAlert size={16} /><div><strong>Finance instruction</strong><p>{selected.assignmentNote}</p></div></section>}
         <section className={`field-authority ${authorityApproved ? 'approved' : 'missing'}`}><ShieldAlert size={17} /><div><strong>{authorityApproved ? 'Recovery authority approved' : 'Recovery authority unavailable'}</strong><p>{selected.authority ? `${selected.authority.documentName} · ${new Date(selected.authority.approvedAt).toLocaleString()}` : 'Stop and contact the finance manager. Verification cannot begin without approved authority.'}</p></div></section>
         {readOnly ? <section className="field-complete-card"><FileCheck2 size={24} /><div><strong>{finalQueued ? 'Field report saved on this device' : 'Field report already submitted'}</strong><p>{finalQueued ? 'Open Pending sync to check delivery. Do not create a duplicate report.' : `Finance status: ${caseStatusLabel(selected.status)}. No further field action is available.`}</p></div>{finalQueued && <button className="field-secondary" onClick={() => { setSelectedId(null); setView('sync'); }}>Open pending sync</button>}</section> : <>
@@ -380,15 +383,19 @@ function FieldSettings({ session, online, pending, onSaved, onNotice, onLogout }
   const [name, setName] = useState(session.user.name);
   const [city, setCity] = useState(session.user.city ?? '');
   const [idProof, setIdProof] = useState('');
+  const savedVehicleRate = session.user.rates?.vehicle?.toString() ?? '';
+  const savedVerificationRate = session.user.rates?.verification?.toString() ?? '';
+  const [rateVehicle, setRateVehicle] = useState(savedVehicleRate);
+  const [rateVerification, setRateVerification] = useState(savedVerificationRate);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '') || idProof.trim().length > 0;
+  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '') || idProof.trim().length > 0 || rateVehicle.trim() !== savedVehicleRate || rateVerification.trim() !== savedVerificationRate;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true); setError('');
     try {
-      const { user } = await api.updateProfile(session.token, { name: name.trim(), city: city.trim(), idProof: idProof.trim() || undefined });
+      const { user } = await api.updateProfile(session.token, { name: name.trim(), city: city.trim(), idProof: idProof.trim() || undefined, rateVehicle: rateVehicle.trim(), rateVerification: rateVerification.trim() });
       setIdProof('');
       onSaved(user);
       onNotice('Your profile was saved.');
@@ -403,6 +410,9 @@ function FieldSettings({ session, online, pending, onSaved, onNotice, onLogout }
       <label className="field-text-label">City<input value={city} onChange={(event) => setCity(event.target.value)} required minLength={2} maxLength={100} /></label>
       <label className="field-text-label">Mobile<input value={session.user.mobile ?? ''} readOnly disabled /></label>
       <label className="field-text-label"><span className="field-idproof-label"><IdCard size={15} /> Update ID proof reference</span><input value={idProof} onChange={(event) => setIdProof(event.target.value)} placeholder="Leave blank to keep your current ID proof" minLength={4} maxLength={100} /></label>
+      <p className="field-label">My rates · shown to financers when they choose an agent</p>
+      <label className="field-text-label">Vehicle seizure (₹ per job)<input value={rateVehicle} onChange={(event) => setRateVehicle(event.target.value)} type="number" inputMode="numeric" min={0} max={100000} step={1} placeholder="Not set" /></label>
+      <label className="field-text-label">House verification (₹ per job)<input value={rateVerification} onChange={(event) => setRateVerification(event.target.value)} type="number" inputMode="numeric" min={0} max={100000} step={1} placeholder="Not set" /></label>
       {error && <p className="field-form-error" role="alert">{error}</p>}
       <button className="field-primary" type="submit" disabled={!dirty || saving}><Check size={18} /> {saving ? 'Saving…' : 'Save profile'}</button>
     </form>

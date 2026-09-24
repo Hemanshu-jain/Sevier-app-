@@ -1,4 +1,4 @@
-import type { Agent, AgentGroup, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AgentRates, AgentRating, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import { apiUrl } from './api-origin.ts';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent' | 'platform_admin';
@@ -14,6 +14,7 @@ export interface SessionUser {
   mobile: string | null;
   city: string | null;
   onboardingComplete?: boolean;
+  rates?: AgentRates;
 }
 
 export interface Session {
@@ -127,6 +128,8 @@ export interface DirectoryAgent {
   city: string | null;
   createdVia: string;
   linked: boolean;
+  rating?: AgentRating | null;
+  rates?: AgentRates;
 }
 
 const sessionKey = 'handoff-session';
@@ -179,7 +182,7 @@ export const api = {
   verifyOtp: (mobile: string, code: string, challengeId: string) => request<Session>('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
   signupRequestOtp: (mobile: string) => request<OtpChallenge>('/api/agent/signup/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
   signupVerify: (mobile: string, code: string, challengeId: string) => request<Session>('/api/agent/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
-  updateProfile: (token: string, values: { name: string; city: string; idProof?: string }) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),
+  updateProfile: (token: string, values: { name: string; city: string; idProof?: string; rateVehicle?: string; rateVerification?: string }) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),
   logout: (token: string) => request<void>('/api/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<{ user: SessionUser }>('/api/me', {}, token),
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),
@@ -225,6 +228,8 @@ export const api = {
   revokeReleasePass: (token: string, caseId: string, reason: string) => request<{ ok: boolean }>(`/api/cases/${caseId}/release-revocation`, { method: 'POST', body: JSON.stringify({ reason }) }, token),
   readNotifications: (token: string) => request<void>('/api/notifications/read-all', { method: 'POST' }, token),
   billing: (token: string) => request<BillingSummary>('/api/billing', {}, token),
+  setAgentVisibility: (token: string, caseId: string, visibility: { customer: boolean; vehicle: boolean }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/agent-visibility`, { method: 'PUT', body: JSON.stringify(visibility) }, token),
+  rateAgent: (token: string, values: { caseId: string; agentId: string; stars: number; comment?: string }) => request<{ rating: { stars: number } }>('/api/ratings', { method: 'POST', body: JSON.stringify(values) }, token),
   apiKeys: (token: string) => request<{ keys: ApiKey[] }>('/api/api-keys', {}, token),
   createApiKey: (token: string, name: string) => request<{ key: ApiKey & { key: string } }>('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) }, token),
   revokeApiKey: (token: string, keyId: string) => request<void>(`/api/api-keys/${keyId}`, { method: 'DELETE' }, token),

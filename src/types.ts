@@ -30,6 +30,18 @@ export interface Agent {
   activeCases: number;
   completedThisMonth: number;
   status: 'Active' | 'Suspended';
+  rating?: AgentRating | null;
+  rates?: AgentRates;
+}
+
+export interface AgentRating {
+  average: number;
+  count: number;
+}
+
+export interface AgentRates {
+  vehicle: number | null;
+  verification: number | null;
 }
 
 export interface RecoveryCase {
@@ -42,7 +54,9 @@ export interface RecoveryCase {
   overdueDays: number;
   status: CaseStatus;
   assignedAgentId?: string;
-  assignedAgents?: { id: string; name: string }[];
+  assignedAgents?: { id: string; name: string; stars?: number }[];
+  agentVisibility?: { customer: boolean; vehicle: boolean };
+  finance?: { company: string; contactName?: string; contactMobile?: string };
   assignedAt?: string;
   assignmentNote?: string;
   updatedAt: string;
