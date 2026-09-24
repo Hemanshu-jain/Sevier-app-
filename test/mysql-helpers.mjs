@@ -2,11 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { createPool, migrate } from '../server/mysql.mjs';
 
 // ponytail: each test owns a pool it ends in finally (a shared pool would keep
-// connections open and hang the test runner). Unique ids = isolation on the shared DB.
-export const skipWithoutDb = process.env.DATABASE_URL ? false : 'set DATABASE_URL to run MySQL tests';
+// connections open and hang the test runner). Unique ids = isolation on the shared test DB.
+// Tests only ever use TEST_DATABASE_URL (a throwaway database), never the live DATABASE_URL.
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (testDatabaseUrl && testDatabaseUrl === process.env.DATABASE_URL) {
+  throw new Error('TEST_DATABASE_URL must point at a separate database, not the live DATABASE_URL.');
+}
+
+export const skipWithoutDb = testDatabaseUrl ? false : 'set TEST_DATABASE_URL to run MySQL tests';
+
+export function testPool() {
+  return createPool(testDatabaseUrl);
+}
 
 export async function migratedPool() {
-  const pool = createPool();
+  const pool = testPool();
   await migrate(pool);
   return pool;
 }

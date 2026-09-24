@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createPool, migrate, query } from '../server/mysql.mjs';
+import { migrate, query } from '../server/mysql.mjs';
+import { skipWithoutDb, testPool } from './mysql-helpers.mjs';
 import { readFieldMutation, saveFieldMutation, validateIdempotencyKey } from '../server/field-mutations.mjs';
 
 // ponytail: unique tenant per test = natural isolation on the shared dev DB (no teardown,
 // and the receipts table is immutable so it can't be cleaned anyway).
-const skip = process.env.DATABASE_URL ? false : 'set DATABASE_URL to run MySQL tests';
+const skip = skipWithoutDb;
 
 test('field mutation receipts replay only the same scoped operation', { skip }, async () => {
-  const pool = createPool();
+  const pool = testPool();
   try {
     await migrate(pool);
     const identity = { tenantId: `t-${randomUUID()}`, userId: 'u1', key: `m-${randomUUID().slice(0, 10)}`, caseId: 'RC-1', operation: 'attempt' };
@@ -25,7 +26,7 @@ test('field mutation receipts replay only the same scoped operation', { skip }, 
 });
 
 test('field mutation receipts cannot be edited or deleted', { skip }, async () => {
-  const pool = createPool();
+  const pool = testPool();
   try {
     await migrate(pool);
     const tenantId = `t-${randomUUID()}`;

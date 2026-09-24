@@ -550,6 +550,7 @@ app.get('/api/platform/overview', auth, requirePlatform, async (_req, res) => {
       COALESCE(SUM(CASE WHEN c.status = 'pending' THEN c.amount_paise END), 0) AS due_paise,
       COALESCE(SUM(c.status = 'pending'), 0) AS locked_count, COUNT(c.id) AS charged_count
     FROM tenants LEFT JOIN wallets w ON w.tenant_id = tenants.id LEFT JOIN billing_charges c ON c.tenant_id = tenants.id
+    WHERE tenants.archived_at IS NULL
     GROUP BY tenants.id, tenants.name, w.balance_paise ORDER BY tenants.name`);
   const settings = await platformSettings(pool);
   res.json({

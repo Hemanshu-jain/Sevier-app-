@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPool, migrate, query, queryOne, tx } from '../server/mysql.mjs';
+import { migrate, query, queryOne, tx } from '../server/mysql.mjs';
+import { skipWithoutDb, testPool } from './mysql-helpers.mjs';
 
-// ponytail: skip unless a dev MySQL is configured, so the suite stays green without one.
-const skip = process.env.DATABASE_URL ? false : 'set DATABASE_URL to run MySQL tests';
+const skip = skipWithoutDb;
 
 test('migrate builds the schema, is idempotent, and declares immutability triggers', { skip }, async () => {
-  const pool = createPool();
+  const pool = testPool();
   try {
     await migrate(pool);
     assert.deepEqual(await migrate(pool), [], 'second migrate should apply nothing');
@@ -29,7 +29,7 @@ test('migrate builds the schema, is idempotent, and declares immutability trigge
 });
 
 test('tx commits on success and rolls back on throw', { skip }, async () => {
-  const pool = createPool();
+  const pool = testPool();
   try {
     await migrate(pool);
     await query(pool, "DELETE FROM tenants WHERE id IN ('t-commit', 't-rollback')");
