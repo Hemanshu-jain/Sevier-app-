@@ -399,7 +399,7 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`}>
-        <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>handoff</span></div>
+        <div className="brand"><img className="brand-logo" src="/handoff-logo-white.png" alt="Handoff" /></div>
         <div className="workspace-label">{session.user.tenantName}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'register' && <b>{cases.length}</b>}</button>)}
@@ -698,7 +698,7 @@ function PrintableReleasePass({ pass, caseItem, custody, tenantName }: { pass: R
   const fmtDate = (date: Date) => date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   return <section className="print-release-pass">
     <header className="pass-letterhead">
-      <div className="pass-brand"><span className="pass-mark"><i /><i /><i /></span><div><strong>{tenantName || 'Finance company'}</strong><span>Vehicle recovery &amp; release authority</span></div></div>
+      <div className="pass-brand"><img className="pass-logo" src="/handoff-logo.png" alt="" /><div><strong>{tenantName || 'Finance company'}</strong><span>Vehicle recovery &amp; release authority</span></div></div>
       <div className="pass-meta"><span>Release pass</span><strong>{pass.id}</strong></div>
     </header>
     <div className="pass-title-block"><h1>Vehicle Release Authorisation</h1><p>Authorises release of the vehicle below from finance custody. Valid only with the verification token and an approved identity document.</p></div>

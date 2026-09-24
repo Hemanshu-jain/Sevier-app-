@@ -67,7 +67,7 @@ function LoginPage({ onSession }: { onSession: (session: Session) => void }) {
   }
 
   return <main className="auth-shell"><section className="auth-card">
-    <div className="auth-brand"><span className="brand-mark"><i /><i /><i /></span>handoff</div>
+    <div className="auth-brand"><img className="auth-logo" src="/handoff-logo.png" alt="Handoff" /></div>
     <div className="auth-intro">
       <p className="eyebrow">Recovery operations</p>
       <h1>{challengeId ? 'Enter your one-time code' : signup ? 'Create your agent account' : 'Sign in to your workspace'}</h1>
@@ -113,7 +113,7 @@ function OnboardingWizard({ session, onDone, onLogout }: { session: Session; onD
   }
 
   return <main className="auth-shell"><section className="auth-card">
-    <div className="auth-brand"><span className="brand-mark"><i /><i /><i /></span>handoff</div>
+    <div className="auth-brand"><img className="auth-logo" src="/handoff-logo.png" alt="Handoff" /></div>
     <div className="auth-intro"><p className="eyebrow">Complete your profile · step {step + 1} of {steps.length}</p><h1>{current.label}</h1><p>Finish setup to start receiving assigned work orders.</p></div>
     <div className="onboard-progress">{steps.map((item, index) => <span key={item.key} className={index <= step ? 'done' : ''} />)}</div>
     {step === 0 && <label className="field-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Ravi Kumar" /></label>}
