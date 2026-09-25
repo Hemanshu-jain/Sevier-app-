@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAgent, setAgentActive, searchAgentDirectory, linkAgent } from '../server/agent-management.mjs';
+import { createAgent, listAgentCases, setAgentActive, searchAgentDirectory, linkAgent } from '../server/agent-management.mjs';
 import { query } from '../server/mysql.mjs';
 import { migratedPool, makeTenant, makeCase, randomMobile, uid, skipWithoutDb } from './mysql-helpers.mjs';
 
@@ -47,7 +47,7 @@ test('directory search finds a global agent and link adds a membership', { skip 
   }
 });
 
-test('per-financer suspension blocks on active assignments then removes from the roster', { skip }, async () => {
+test('per-financer suspension works with active cases, hides them from the agent, and reactivation restores them', { skip }, async () => {
   const pool = await migratedPool();
   try {
     const tenantA = await makeTenant(pool);
@@ -56,10 +56,13 @@ test('per-financer suspension blocks on active assignments then removes from the
     const caseId = await makeCase(pool, { tenantId: tenantA, status: 'assigned', assignedAgentUserId: agentId });
     await query(pool, "INSERT INTO case_assignments (tenant_id, case_id, agent_user_id, assigned_at, assigned_by_user_id, active) VALUES (?, ?, ?, '2026-08-01', ?, 1)", [tenantA, caseId, agentId, agentId]);
 
-    await assert.rejects(setAgentActive({ database: pool, tenantId: tenantA, agentId, active: false }), /active cases/i);
-    await query(pool, 'UPDATE case_assignments SET active = 0 WHERE agent_user_id = ?', [agentId]);
+    assert.deepEqual((await listAgentCases(pool, agentId)).map((row) => row.id), [caseId]);
     assert.equal((await setAgentActive({ database: pool, tenantId: tenantA, agentId, active: false })).active, false);
     assert.equal((await query(pool, 'SELECT active FROM agent_memberships WHERE agent_user_id = ? AND tenant_id = ?', [agentId, tenantA]))[0].active, 0);
+    assert.deepEqual(await listAgentCases(pool, agentId), [], 'a suspended agent no longer sees that financer’s cases');
+    assert.equal((await query(pool, 'SELECT active FROM case_assignments WHERE case_id = ?', [caseId]))[0].active, 1, 'the assignment itself is kept');
+    await setAgentActive({ database: pool, tenantId: tenantA, agentId, active: true });
+    assert.deepEqual((await listAgentCases(pool, agentId)).map((row) => row.id), [caseId]);
   } finally {
     await pool.end();
   }

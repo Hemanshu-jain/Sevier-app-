@@ -7,7 +7,7 @@ import { query, queryOne, tx } from './mysql.mjs';
 
 export const TOPUP_AMOUNTS_PAISE = Object.freeze([200000, 500000, 1000000]);
 
-const PRICE_COLUMN = { case_import: 'vehicle_row_paise', case_manual: 'vehicle_row_paise', case_api: 'vehicle_row_paise', verification: 'verification_fee_paise' };
+const PRICE_COLUMN = { case_import: 'vehicle_row_paise', case_manual: 'vehicle_row_paise', case_api: 'vehicle_row_paise', verification: 'verification_fee_paise', api_key: 'api_key_fee_paise' };
 const LOCK_TABLE = { case_import: 'recovery_cases', case_manual: 'recovery_cases', case_api: 'recovery_cases', verification: 'verification_requests' };
 
 export async function platformSettings(executor) {
@@ -48,7 +48,7 @@ export async function chargeItems(conn, { tenantId, items, now = new Date().toIS
     } else {
       blocked = true;
       result.pending += 1; result.amountDuePaise += amount;
-      if (item.lockable) await query(conn, `UPDATE ${LOCK_TABLE[item.itemType]} SET billing_locked = 1 WHERE id = ? AND tenant_id = ?`, [item.itemId, tenantId]);
+      if (item.lockable && LOCK_TABLE[item.itemType]) await query(conn, `UPDATE ${LOCK_TABLE[item.itemType]} SET billing_locked = 1 WHERE id = ? AND tenant_id = ?`, [item.itemId, tenantId]);
     }
   }
   await query(conn, 'UPDATE wallets SET balance_paise = ?, updated_at = ? WHERE tenant_id = ?', [balance, now, tenantId]);
@@ -69,7 +69,7 @@ export async function settlePending(conn, { tenantId, now = new Date().toISOStri
   }
   for (const charge of settled) {
     const stillOwing = await queryOne(conn, "SELECT 1 FROM billing_charges WHERE tenant_id = ? AND item_id = ? AND status = 'pending' LIMIT 1", [tenantId, charge.item_id]);
-    if (!stillOwing) await query(conn, `UPDATE ${LOCK_TABLE[charge.item_type]} SET billing_locked = 0 WHERE id = ? AND tenant_id = ?`, [charge.item_id, tenantId]);
+    if (!stillOwing && LOCK_TABLE[charge.item_type]) await query(conn, `UPDATE ${LOCK_TABLE[charge.item_type]} SET billing_locked = 0 WHERE id = ? AND tenant_id = ?`, [charge.item_id, tenantId]);
   }
   await query(conn, 'UPDATE wallets SET balance_paise = ?, updated_at = ? WHERE tenant_id = ?', [balance, now, tenantId]);
   return { settled: settled.length, balancePaise: balance };

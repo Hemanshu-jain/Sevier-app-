@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
+  ArrowLeft,
   Bell,
   Camera,
   Check,
@@ -13,6 +14,7 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
+  Megaphone,
   MapPin,
   Menu,
   MoreHorizontal,
@@ -36,13 +38,14 @@ import { caseStatusLabel } from './types';
 import { financeCaseAction } from './finance-case-action';
 import { isActivationKey, isSearchShortcut } from './interaction';
 import { financeReviewCases } from './desktop-metrics';
-import BillingPage, { rupees } from './BillingPage';
-import ApiKeysCard from './ApiKeysCard';
+import { rupees } from './BillingPage';
+import SettingsPage from './SettingsPage';
+import type { SettingsTab } from './SettingsPage';
 import CaseAgentPanel, { RatingBadge, rateText } from './CaseAgentPanel';
 import Modal from './Modal';
 import { VerificationTab } from './VerificationPages';
 
-type Page = 'requests' | 'dashboard' | 'billing' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
+type Page = 'requests' | 'dashboard' | 'agents' | 'custody' | 'releases' | 'reports' | 'notifications' | 'settings';
 type DialogType = 'import' | 'account' | 'edit-account' | 'agent' | 'member' | 'authority' | 'assign' | 'custody-review' | 'payment' | 'release' | 'close' | null;
 
 const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard }> = [
@@ -52,7 +55,6 @@ const navigation: Array<{ id: Page; label: string; icon: typeof LayoutDashboard 
   { id: 'custody', label: 'Custody records', icon: PackageCheck },
   { id: 'releases', label: 'Release passes', icon: FileCheck2 },
   { id: 'reports', label: 'Reports & audit', icon: Gauge },
-  { id: 'billing', label: 'Billing & wallet', icon: Wallet },
 ];
 
 const statusStyles: Record<CaseStatus, string> = {
@@ -118,6 +120,12 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   const [auditLoading, setAuditLoading] = useState(false);
   const [financeMembers, setFinanceMembers] = useState<FinanceMember[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [requestFilter, setRequestFilter] = useState('All');
+  const [navExpanded, setNavExpanded] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [flash, setFlash] = useState('Audit trail is active: every action in this workspace is recorded.');
   const searchRef = useRef<HTMLInputElement>(null);
 
   const selectedCase = cases.find((item) => item.id === selectedCaseId) ?? null;
@@ -125,7 +133,8 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   const pendingReview = financeReviewCases(cases);
   const canViewReports = session.user.permissions.includes('report.export') || session.user.permissions.includes('audit.view');
   const canBill = session.user.permissions.includes('billing.manage');
-  const visibleNavigation = navigation.filter((item) => (item.id !== 'reports' || canViewReports) && (item.id !== 'billing' || canBill));
+  const visibleNavigation = navigation.filter((item) => item.id !== 'reports' || canViewReports);
+  const pageLabel = selectedCase ? 'Application' : page === 'settings' ? 'Settings' : page === 'notifications' ? 'Notifications' : visibleNavigation.find((item) => item.id === page)?.label ?? page;
   const now = new Date();
   const dateLabel = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -146,7 +155,36 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
     setAgentList(workspace.agents);
     setGroups(workspace.groups ?? []);
     setAppNotifications(workspace.notifications);
+    if (canBill) api.billing(session.token).then((summary) => setWalletBalance(summary.balancePaise)).catch(() => undefined);
   }
+
+  function goTo(next: Page) {
+    setPage(next); setSelectedCaseId(null); setMobileNavOpen(false);
+  }
+
+  function openSettings(tab: SettingsTab) {
+    setSettingsTab(tab); goTo('settings');
+  }
+
+  function openRequests(filter: string) {
+    setRequestFilter(filter); goTo('requests');
+  }
+
+  async function offerCase(caseId: string, withdraw: boolean) {
+    try {
+      setActionError(''); setActionNotice('');
+      if (withdraw) { await api.withdrawOffer(session.token, caseId); setActionNotice('Offer withdrawn.'); }
+      else { const { notified } = await api.offerCase(session.token, caseId); setActionNotice(`Offered to ${notified} active agent${notified === 1 ? '' : 's'}. The first to accept gets the case.`); }
+      await loadWorkspace();
+    } catch (error) { setActionError(error instanceof Error ? error.message : 'The offer could not be updated.'); }
+  }
+
+  // The sign-in notice shows for 4s once the workspace is on screen, not while it is still loading.
+  useEffect(() => {
+    if (loading) return undefined;
+    const timer = window.setTimeout(() => setFlash(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     loadWorkspace().catch((error) => setActionError(error instanceof Error ? error.message : 'Unable to load this workspace.')).finally(() => setLoading(false));
@@ -398,45 +436,44 @@ function App({ session, onLogout, onSessionUpdate }: { session: Session; onLogou
   }
 
   const pageContent: Record<Page, ReactNode> = {
-    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} onOpenBilling={canBill ? () => setPage('billing') : undefined} verificationCount={verifications.length} verificationTab={<VerificationTab verifications={verifications} agents={agentList} session={session} onChanged={loadWorkspace} />} />,
-    billing: <BillingPage session={session} />,
-    dashboard: <Dashboard cases={cases} agentList={agentList} pendingReview={pendingReview} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onPageChange={setPage} />,
+    requests: <RequestsPage cases={visibleCases} allCases={cases} canImport={session.user.permissions.includes('import.manage')} canManage={session.user.permissions.includes('account.manage')} onImport={() => setDialog('import')} onAdd={() => setDialog('account')} onSelectCase={setSelectedCaseId} filter={requestFilter} onFilterChange={setRequestFilter} onOpenBilling={canBill ? () => openSettings('billing') : undefined} verificationCount={verifications.length} verificationTab={<VerificationTab verifications={verifications} agents={agentList} session={session} onChanged={loadWorkspace} />} />,
+    dashboard: <Dashboard cases={cases} agentList={agentList} pendingReview={pendingReview} monthLabel={monthLabel} onSelectCase={setSelectedCaseId} onOpenRequests={openRequests} />,
     agents: <AgentsPage agents={agentList} groups={groups} cases={cases} session={session} canManage={session.user.permissions.includes('agent.manage')} onAdd={() => setDialog('agent')} onChangeStatus={changeAgentStatus} onSelectCase={setSelectedCaseId} onGroupsChanged={loadWorkspace} onNotice={setActionNotice} onError={setActionError} />,
     custody: <CustodyPage custody={custody} cases={cases} session={session} canReview={session.user.permissions.includes('custody.review')} onReviewed={loadWorkspace} onNotice={setActionNotice} onError={setActionError} onSelectCase={setSelectedCaseId} />,
     releases: <ReleasesPage cases={cases} onSelectCase={setSelectedCaseId} />, 
     reports: <ReportsPage cases={cases} events={auditEvents} loading={auditLoading} canExport={session.user.permissions.includes('report.export')} onExport={exportCaseReport} />,
     notifications: <NotificationsPage items={appNotifications} onReadAll={async () => { await api.readNotifications(session.token); await loadWorkspace(); }} />, 
-    settings: <SettingsPage members={financeMembers} loading={membersLoading} session={session} onAdd={() => setDialog('member')} onChangeStatus={changeMemberStatus} onLogout={onLogout} onSaveProfile={saveProfile} />,
+    settings: <SettingsPage session={session} tab={settingsTab} onTabChange={setSettingsTab} members={financeMembers} membersLoading={membersLoading} onAddMember={() => setDialog('member')} onChangeMemberStatus={changeMemberStatus} onSaveProfile={saveProfile} />,
   };
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`}>
+    <div className={`app-shell ${navExpanded ? 'nav-expanded' : ''}`}>
+      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`} onMouseEnter={() => setNavExpanded(true)} onMouseLeave={() => setNavExpanded(false)} onFocus={() => setNavExpanded(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNavExpanded(false); }}>
         <div className="brand"><img className="brand-logo" src="/handoff-logo-white.png" alt="Handoff" /></div>
         <div className="workspace-label">{session.user.tenantName}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-link active' : 'nav-link'} onClick={() => { setPage(id); setMobileNavOpen(false); }}><Icon size={17} /> <span>{label}</span>{id === 'requests' && <b>{cases.length}</b>}</button>)}
+          {visibleNavigation.map(({ id, label, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id && !selectedCase ? 'nav-link active' : 'nav-link'} title={label} onClick={() => goTo(id)}><Icon size={17} /> <span>{label}</span>{id === 'requests' && <b>{cases.length}</b>}</button>)}
         </nav>
         <div className="sidebar-spacer" />
-        <div className="security-note"><ShieldCheck size={16} /><div><strong>Tenant protected</strong><span>Audit trail is active</span></div></div>
-        <button className={page === 'settings' ? 'nav-link active' : 'nav-link'} onClick={() => setPage('settings')}><Settings size={17} /> <span>Settings</span></button>
-        <button className="profile" onClick={onLogout} title="Sign out"><span className="avatar">{session.user.name.split(' ').map((word) => word[0]).join('')}</span><div><strong>{session.user.name}</strong><small>{session.user.role.replace('_', ' ')}</small></div><LogOut size={15} /></button>
+        <div className="profile"><span className="avatar">{session.user.name.split(' ').map((word) => word[0]).join('')}</span><div className="profile-text"><strong>{session.user.name}</strong><small>{session.user.role.replace('_', ' ')}</small></div><button type="button" className={`profile-action ${page === 'settings' ? 'active' : ''}`} onClick={() => openSettings('profile')} aria-label="Settings" title="Settings"><Settings size={16} /></button><button type="button" className="profile-action" onClick={() => setConfirmingLogout(true)} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button></div>
       </aside>
 
       <main className="main-area">
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMobileNavOpen((value) => !value)} aria-label="Toggle navigation"><Menu size={21} /></button>
-          <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' ? `${greeting}, ${session.user.name.split(' ')[0]}` : visibleNavigation.find((item) => item.id === page)?.label ?? page}</h1></div>
+          <div><p className="date-label">{dateLabel}</p><h1>{page === 'dashboard' && !selectedCase ? `${greeting}, ${session.user.name.split(' ')[0]}` : pageLabel}</h1></div>
           <div className="topbar-actions">
-            <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && page !== 'requests') setPage('requests'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
-            <button className="notification-button" onClick={() => setPage('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount > 9 ? '9+' : unreadCount}</b>}</button>
+            <label className="search-box"><span className="sr-only">Search recovery cases</span><Search size={17} /><input ref={searchRef} aria-label="Search recovery cases" value={search} onChange={(event) => { setSearch(event.target.value); if (event.target.value && (page !== 'requests' || selectedCase)) goTo('requests'); }} placeholder="Search cases, people, vehicles..." /><kbd>Ctrl K</kbd></label>
+            {canBill && walletBalance !== null && <button className="wallet-chip" onClick={() => openSettings('billing')} aria-label={`Wallet balance ${rupees(walletBalance)}. Open billing and wallet`} title="Billing and wallet"><Wallet size={16} /><span>{rupees(walletBalance)}</span></button>}
+            <button className="notification-button" onClick={() => goTo('notifications')} aria-label="Open notifications"><Bell size={18} />{unreadCount > 0 && <b>{unreadCount > 9 ? '9+' : unreadCount}</b>}</button>
             {session.user.permissions.includes('import.manage') && <button className="primary-button" onClick={() => setDialog('import')}><Plus size={16} /> Import register</button>}
           </div>
         </header>
-        <section className="content-area">{actionError && <div className="app-error" role="alert">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice" role="status">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading" role="status">Loading your tenant workspace…</div> : pageContent[page]}</section>
+        <section className="content-area">{actionError && <div className="app-error" role="alert">{actionError}<button onClick={() => setActionError('')} aria-label="Dismiss error"><X size={14} /></button></div>}{actionNotice && <div className="app-notice" role="status">{actionNotice}<button onClick={() => setActionNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}{loading ? <div className="workspace-loading" role="status">Loading your tenant workspace…</div> : selectedCase ? <CasePage onChanged={loadWorkspace} caseItem={selectedCase} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} onRevokeAuthority={revokeAuthority} onRevokeRelease={revokeReleasePass} onOffer={(withdraw) => offerCase(selectedCase.id, withdraw)} /> : pageContent[page]}</section>
       </main>
 
-      {selectedCase && <CaseDrawer onChanged={loadWorkspace} caseItem={selectedCase} custody={custody.find((record) => record.id === selectedCase.custodyId)} evidence={caseEvidence} evidenceLoading={evidenceLoading} releasePass={releasePasses.find((pass) => pass.caseId === selectedCase.id)} session={session} onClose={() => { setSelectedCaseId(null); setDialog(null); }} onOpenDialog={setDialog} onPrint={printReleasePass} onRevokeAuthority={revokeAuthority} onRevokeRelease={revokeReleasePass} />}
+      {flash && !loading && <div className="flash-toast" role="status"><ShieldCheck size={15} /> {flash}</div>}
+      {confirmingLogout && <Modal title="Sign out of Handoff?" onClose={() => setConfirmingLogout(false)}><p className="modal-copy">You will need a new one-time code to sign in again.</p><div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setConfirmingLogout(false)}>Stay signed in</button><button className="primary-button" type="button" onClick={onLogout}><LogOut size={15} /> Sign out</button></div></Modal>}
       {dialog === 'import' && <ImportDialog onClose={() => setDialog(null)} onSubmit={importMonthlyRegister} />}
       {(dialog === 'account' || (dialog === 'edit-account' && selectedCase)) && <AccountDialog caseItem={dialog === 'edit-account' ? selectedCase ?? undefined : undefined} onClose={() => setDialog(null)} onSubmit={saveAccount} />}
       {dialog === 'agent' && <AgentDialog session={session} onClose={() => setDialog(null)} onSubmit={createAgent} onLinked={loadWorkspace} />}
@@ -457,25 +494,33 @@ function monthStartDate() {
   return start;
 }
 
+// Request-list filters: a status, or one of the KPI views.
+function matchesRequestFilter(item: RecoveryCase, filter: string) {
+  if (filter === 'All') return true;
+  if (filter === 'month') return new Date(item.createdAt) >= monthStartDate();
+  if (filter === 'review') return financeReviewCases([item]).length > 0;
+  return item.status === filter;
+}
+
 function applicationCounts(cases: RecoveryCase[]) {
   const start = monthStartDate();
   return { thisMonth: cases.filter((item) => new Date(item.createdAt) >= start).length, total: cases.length };
 }
 
-function Dashboard({ cases, agentList, pendingReview, monthLabel, onSelectCase, onPageChange }: { cases: RecoveryCase[]; agentList: Agent[]; pendingReview: RecoveryCase[]; monthLabel: string; onSelectCase: (id: string) => void; onPageChange: (page: Page) => void }) {
+function Dashboard({ cases, agentList, pendingReview, monthLabel, onSelectCase, onOpenRequests }: { cases: RecoveryCase[]; agentList: Agent[]; pendingReview: RecoveryCase[]; monthLabel: string; onSelectCase: (id: string) => void; onOpenRequests: (filter: string) => void }) {
   const counts = applicationCounts(cases);
   const inField = cases.filter((item) => item.status === 'assigned');
   const recent = [...cases].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
   return <>
     <div className="page-heading"><div><p className="eyebrow">{monthLabel}</p><h2>Overview</h2><p className="page-copy">Applications are counted when they are created. Field outcomes are tracked per agent.</p></div></div>
     <section className="count-strip">
-      <div><strong>{counts.thisMonth}</strong><span>Applications this month</span></div>
-      <div><strong>{counts.total}</strong><span>All applications</span></div>
-      <div><strong>{inField.length}</strong><span>With agents now</span></div>
-      <button onClick={() => onPageChange('requests')}><strong>{pendingReview.length}</strong><span>Need finance review</span></button>
+      <button type="button" onClick={() => onOpenRequests('month')}><strong>{counts.thisMonth}</strong><span>Applications this month</span></button>
+      <button type="button" onClick={() => onOpenRequests('All')}><strong>{counts.total}</strong><span>All applications</span></button>
+      <button type="button" onClick={() => onOpenRequests('assigned')}><strong>{inField.length}</strong><span>With agents now</span></button>
+      <button type="button" onClick={() => onOpenRequests('review')}><strong>{pendingReview.length}</strong><span>Need finance review</span></button>
     </section>
     <section className="dashboard-columns">
-      <article className="card case-card"><CardHeading title="Active field work" description="Applications assigned to independent agents" action="All requests" onAction={() => onPageChange('requests')} />
+      <article className="card case-card"><CardHeading title="Active field work" description="Applications assigned to independent agents" action="All requests" onAction={() => onOpenRequests('All')} />
         <div className="table-scroll"><table><thead><tr><th>Application</th><th>Vehicle</th><th>Assigned agent</th><th>Status</th><th /></tr></thead><tbody>{inField.length ? inField.map((item) => <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open case ${item.id} for ${item.borrower.name}`} onClick={() => onSelectCase(item.id)} onKeyDown={(event) => openRowFromKeyboard(event, () => onSelectCase(item.id))}><td><strong>{item.borrower.name}</strong><small>{item.id}</small></td><td>{item.vehicle.registration}<small>{item.vehicle.makeModel}</small></td><td>{agentName(agentList, item.assignedAgentId)}</td><td><StatusPill status={item.status} /></td><td><ChevronRight size={17} /></td></tr>) : <tr><td colSpan={5}><div className="empty-table">No applications are with agents right now.</div></td></tr>}</tbody></table></div>
       </article>
       <aside className="dashboard-side">
@@ -493,25 +538,25 @@ function CardHeading({ title, description, action, onAction }: { title: string; 
   return <div className="card-heading"><div><h3>{title}</h3><p>{description}</p></div>{action && <button className="text-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</div>;
 }
 
-function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase, onOpenBilling, verificationTab, verificationCount }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void; onOpenBilling?: () => void; verificationTab: ReactNode; verificationCount: number }) {
+function RequestsPage({ cases, allCases, canImport, canManage, onImport, onAdd, onSelectCase, filter, onFilterChange, onOpenBilling, verificationTab, verificationCount }: { cases: RecoveryCase[]; allCases: RecoveryCase[]; canImport: boolean; canManage: boolean; onImport: () => void; onAdd: () => void; onSelectCase: (id: string) => void; filter: string; onFilterChange: (filter: string) => void; onOpenBilling?: () => void; verificationTab: ReactNode; verificationCount: number }) {
   const [tab, setTab] = useState<'vehicle' | 'verification'>('vehicle');
   const lockedCount = allCases.filter((item) => item.billingLocked).length;
-  const [status, setStatus] = useState('All');
   const counts = applicationCounts(allCases);
-  const filtered = (status === 'All' ? cases : cases.filter((item) => item.status === status)).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const filtered = cases.filter((item) => matchesRequestFilter(item, filter)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const kpi = (id: string, value: number, label: string) => <button type="button" aria-pressed={filter === id} className={filter === id ? 'active' : ''} onClick={() => onFilterChange(id)}><strong>{value}</strong><span>{label}</span></button>;
   const tabs = <div className="request-tabs" role="tablist" aria-label="Request type"><button role="tab" aria-selected={tab === 'vehicle'} className={tab === 'vehicle' ? 'active' : ''} onClick={() => setTab('vehicle')}>Vehicle seizure <b>{allCases.length}</b></button><button role="tab" aria-selected={tab === 'verification'} className={tab === 'verification' ? 'active' : ''} onClick={() => setTab('verification')}>House verification <b>{verificationCount}</b></button></div>;
   if (tab === 'verification') return <>{tabs}{verificationTab}</>;
   return <>
     {tabs}
     <div className="page-heading"><div><p className="eyebrow">Vehicle seizure</p><h2>Application requests</h2><p className="page-copy">Each imported or added account is one application. Open it to review, approve authority and assign an agent.</p></div><div className="heading-actions">{canManage && <button className="secondary-button" onClick={onAdd}><Plus size={15} /> Add one account</button>}{canImport && <button className="primary-button" onClick={onImport}><Plus size={16} /> Import file</button>}</div></div>
     <section className="count-strip">
-      <div><strong>{counts.thisMonth}</strong><span>Applications this month</span></div>
-      <div><strong>{counts.total}</strong><span>All applications</span></div>
-      <div><strong>{allCases.filter((item) => item.status === 'imported').length}</strong><span>Awaiting review</span></div>
-      <div><strong>{allCases.filter((item) => item.status === 'assigned').length}</strong><span>With agents</span></div>
+      {kpi('month', counts.thisMonth, 'Applications this month')}
+      {kpi('All', counts.total, 'All applications')}
+      {kpi('imported', allCases.filter((item) => item.status === 'imported').length, 'Awaiting review')}
+      {kpi('assigned', allCases.filter((item) => item.status === 'assigned').length, 'With agents')}
     </section>
     {lockedCount > 0 && <div className="locked-banner"><Lock size={16} /><span>{lockedCount} application{lockedCount === 1 ? ' is' : 's are'} locked until your wallet is recharged. They unlock automatically, oldest first.</span>{onOpenBilling && <button className="secondary-button" onClick={onOpenBilling}>Recharge wallet</button>}</div>}
-    <div className="list-toolbar"><label className="status-filter">Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option>All</option>{Array.from(new Set(allCases.map((item) => item.status))).map((item) => <option key={item} value={item}>{caseStatusLabel(item)}</option>)}</select></label></div>
+    <div className="list-toolbar"><label className="status-filter">Show<select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="All">All applications</option><option value="month">Created this month</option><option value="review">Needs finance review</option>{Array.from(new Set(allCases.map((item) => item.status))).map((item) => <option key={item} value={item}>{caseStatusLabel(item)}</option>)}</select></label></div>
     <CaseTable cases={filtered} onSelectCase={onSelectCase} showLoan />
     <section className="compliance-banner"><ShieldCheck size={18} /><p><strong>Finance control point.</strong> Importing an overdue account does not create recovery authority. Your finance team decides which cases are assigned.</p></section>
   </>;
@@ -522,7 +567,7 @@ function CaseTable({ cases, onSelectCase, showLoan }: { cases: RecoveryCase[]; o
 }
 
 function AgentsPage({ agents, groups, cases, session, canManage, onAdd, onChangeStatus, onSelectCase, onGroupsChanged, onNotice, onError }: { agents: Agent[]; groups: AgentGroup[]; cases: RecoveryCase[]; session: Session; canManage: boolean; onAdd: () => void; onChangeStatus: (agent: Agent) => void; onSelectCase: (id: string) => void; onGroupsChanged: () => Promise<void>; onNotice: (message: string) => void; onError: (message: string) => void }) {
-  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign to them.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><p className="agent-meta"><RatingBadge rating={agent.rating} /> <span>Vehicle: {rateText(agent.rates, 'vehicle')}</span></p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>jobs submitted this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" disabled={agent.status === 'Active' && assigned.length > 0} title={agent.status === 'Active' && assigned.length > 0 ? 'Reassign or close active cases first' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section>{canManage && <GroupsPanel groups={groups} agents={agents} session={session} onChanged={onGroupsChanged} onNotice={onNotice} onError={onError} />}</>;
+  return <><div className="page-heading"><div><p className="eyebrow">External field workforce</p><h2>Seizure agents</h2><p className="page-copy">Independent agents only receive the cases your finance users assign or offer to them. A suspended agent stops seeing your cases until reactivated.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={16} /> Add agent</button>}</div><section className="agent-grid">{agents.map((agent) => { const assigned = cases.filter((item) => item.assignedAgentId === agent.id && item.status !== 'closed'); return <article className="card agent-card" key={agent.id}><div className="agent-card-top"><span className="agent-avatar">{agent.name.split(' ').map((word) => word[0]).join('')}</span><span className={`agent-status ${agent.status === 'Active' ? 'good' : 'off'}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.city} · {agent.mobile}</p><p className="agent-meta"><RatingBadge rating={agent.rating} /> <span>Vehicle: {rateText(agent.rates, 'vehicle')}</span></p><div className="agent-stats"><span><strong>{assigned.length}</strong>active cases</span><span><strong>{agent.completedThisMonth}</strong>jobs submitted this month</span></div><div className="agent-card-actions">{assigned.length > 0 && <button className="agent-case-link" onClick={() => onSelectCase(assigned[0].id)}>Open current case <ChevronRight size={14} /></button>}{canManage && <button className="text-button" title={agent.status === 'Active' ? 'The agent stops seeing your cases until reactivated' : ''} onClick={() => onChangeStatus(agent)}>{agent.status === 'Active' ? 'Suspend' : 'Reactivate'}</button>}</div></article>; })}</section>{canManage && <GroupsPanel groups={groups} agents={agents} session={session} onChanged={onGroupsChanged} onNotice={onNotice} onError={onError} />}</>;
 }
 
 // Agent groups: build a named set of roster agents, then send one message that reaches each member individually.
@@ -640,34 +685,18 @@ function NotificationsPage({ items, onReadAll }: { items: AppNotification[]; onR
   return <><div className="page-heading"><div><p className="eyebrow">Finance and field updates</p><h2>Notifications</h2><p className="page-copy">Assignments, field updates, custody records, payment confirmation, and release events.</p></div><button className="secondary-button" onClick={onReadAll}><Check size={15} /> Mark all read</button></div><article className="card notification-list">{items.map((item) => <div className={`notification-row ${item.read ? '' : 'unread'}`} key={item.id}><span className={`notification-icon ${item.tone}`}><Bell size={16} /></span><div><h3>{item.title}</h3><p>{item.detail}</p><small>{item.createdAt}</small></div>{!item.read && <i />}</div>)}</article></>;
 }
 
-function SettingsPage({ members, loading, session, onAdd, onChangeStatus, onLogout, onSaveProfile }: { members: FinanceMember[]; loading: boolean; session: Session; onAdd: () => void; onChangeStatus: (member: FinanceMember) => void; onLogout: () => void; onSaveProfile: (values: { name: string; city: string }) => Promise<void> }) {
-  const canManage = session.user.permissions.includes('member.manage');
-  const canChange = (member: FinanceMember) => member.id !== session.user.id && member.role !== 'super_admin' && (session.user.role === 'super_admin' || member.role === 'finance_staff');
-  const roleLabel = session.user.role.replace(/_/g, ' ');
-  return <><div className="page-heading"><div><p className="eyebrow">Finance company workspace</p><h2>Settings</h2><p className="page-copy">Manage your profile, finance-team access, and the security controls active for this tenant.</p></div>{canManage && <button className="primary-button" onClick={onAdd}><Plus size={15} /> Add finance user</button>}</div>
-    <ProfileCard session={session} onSave={onSaveProfile} onLogout={onLogout} />
-    {session.user.permissions.includes('organization.manage') && <ApiKeysCard session={session} />}
-    <article className="card settings-block"><div className="card-heading"><div><h3>Tenant</h3><p>The finance company this workspace belongs to</p></div></div><dl className="detail-grid"><div><dt>Company</dt><dd>{session.user.tenantName ?? '—'}</dd></div><div><dt>Your role</dt><dd style={{ textTransform: 'capitalize' }}>{roleLabel}</dd></div><div><dt>Permissions</dt><dd>{session.user.permissions.length} granted</dd></div></dl></article>
-    {canManage && <article className="card data-card"><div className="card-heading"><div><h3>Finance users</h3><p>OTP identities and fixed responsibility templates</p></div></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Mobile</th><th>City</th><th>Role</th><th>Status</th><th /></tr></thead><tbody>{loading ? <tr><td colSpan={6}><div className="empty-table">Loading finance users…</div></td></tr> : members.map((member) => <tr key={member.id}><td><strong>{member.name}</strong></td><td className="mono">{member.mobile}</td><td>{member.city}</td><td>{member.role.replace(/_/g, ' ')}</td><td><span className={`agent-status ${member.active ? 'good' : 'off'}`}>{member.active ? 'Active' : 'Suspended'}</span></td><td>{canChange(member) && <button className="text-button" onClick={() => onChangeStatus(member)}>{member.active ? 'Suspend' : 'Reactivate'}</button>}</td></tr>)}</tbody></table></div></article>}
-    <section className="settings-grid"><article className="card settings-card"><ShieldCheck size={20} /><h3>OTP and sessions</h3><p>Mobile OTP sign-in, hashed session tokens, expiry, logout revocation, and suspension revocation are active.</p></article><article className="card settings-card"><Bell size={20} /><h3>In-app notifications</h3><p>Assignments, failed attempts, custody submissions, payments, and release events are stored per tenant.</p></article><article className="card settings-card"><FileText size={20} /><h3>Loan-data sources</h3><p>CSV and XLSX monthly imports are active with immutable snapshots and duplicate-file detection.</p></article></section></>;
-}
+const OFFERABLE: CaseStatus[] = ['imported', 'unable_to_recover'];
 
-function ProfileCard({ session, onSave, onLogout }: { session: Session; onSave: (values: { name: string; city: string }) => Promise<void>; onLogout: () => void }) {
-  const [name, setName] = useState(session.user.name);
-  const [city, setCity] = useState(session.user.city ?? '');
-  const [saving, setSaving] = useState(false);
-  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '');
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true);
-    try { await onSave({ name: name.trim(), city: city.trim() }); } finally { setSaving(false); }
-  }
-  return <article className="card settings-block"><div className="card-heading"><div><h3>Your profile</h3><p>Your name and city; mobile and role are identity-locked</p></div><button className="text-button danger" type="button" onClick={onLogout}><LogOut size={14} /> Sign out</button></div>
-    <form className="profile-form" onSubmit={submit}><div className="form-two-col"><label className="field-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} maxLength={100} /></label><label className="field-label">City<input value={city} onChange={(event) => setCity(event.target.value)} required minLength={2} maxLength={100} /></label><label className="field-label">Mobile<input value={session.user.mobile ?? ''} readOnly disabled /></label><label className="field-label">Role<input value={session.user.role.replace(/_/g, ' ')} readOnly disabled style={{ textTransform: 'capitalize' }} /></label></div><div className="modal-actions"><button className="primary-button" type="submit" disabled={!dirty || saving}><Check size={15} /> {saving ? 'Saving…' : 'Save profile'}</button></div></form>
-  </article>;
-}
-
-function CaseDrawer({ onChanged, caseItem, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint, onRevokeAuthority, onRevokeRelease }: { onChanged: () => Promise<void>; caseItem: RecoveryCase; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void; onRevokeAuthority: () => void; onRevokeRelease: () => void }) {
+// An application opens as its own page (it has too much for a side panel). Back or Esc returns to the list.
+function CasePage({ onChanged, caseItem, custody, evidence, evidenceLoading, releasePass, session, onClose, onOpenDialog, onPrint, onRevokeAuthority, onRevokeRelease, onOffer }: { onChanged: () => Promise<void>; caseItem: RecoveryCase; custody?: CustodyRecord; evidence: EvidenceRecord[]; evidenceLoading: boolean; releasePass?: ReleasePass; session: Session; onClose: () => void; onOpenDialog: (dialog: DialogType) => void; onPrint: (pass: ReleasePass) => void; onRevokeAuthority: () => void; onRevokeRelease: () => void; onOffer: (withdraw: boolean) => void }) {
+  useEffect(() => { window.scrollTo(0, 0); }, [caseItem.id]);
+  useEffect(() => {
+    // An open dialog handles Esc itself; only leave the page when nothing is on top of it.
+    const backOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.modal-backdrop')) onClose(); };
+    window.addEventListener('keydown', backOnEscape);
+    return () => window.removeEventListener('keydown', backOnEscape);
+  }, [onClose]);
+  const canOffer = session.user.permissions.includes('case.assign') && Boolean(caseItem.authority) && !caseItem.billingLocked && !caseItem.assignedAgents?.length && OFFERABLE.includes(caseItem.status);
   const actionButton = () => {
     const action = financeCaseAction({ status: caseItem.status, hasAuthority: Boolean(caseItem.authority), hasCustody: Boolean(custody), hasReleasePass: Boolean(releasePass) }, session.user.permissions);
     if (action === 'authority') return <button className="primary-button full" onClick={() => onOpenDialog('authority')}><ShieldCheck size={16} /> Review recovery authority</button>;
@@ -681,19 +710,21 @@ function CaseDrawer({ onChanged, caseItem, custody, evidence, evidenceLoading, r
     if (action === 'closed') return <div className="closed-note"><Check size={15} /> Case closed</div>;
     return <div className="field-waiting"><ShieldCheck size={16} /> An authorised finance manager must complete the next step.</div>;
   };
-  return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer" role="dialog" aria-modal="true" aria-labelledby="case-drawer-title"><div className="drawer-top"><div><p className="eyebrow">{caseItem.id}</p><h2 id="case-drawer-title">{caseItem.borrower.name}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label="Close case details"><X size={18} /></button></div><StatusPill status={caseItem.status} />
+  return <article className="case-page" aria-labelledby="case-page-title"><button className="back-link" type="button" onClick={onClose}><ArrowLeft size={16} /> Back <kbd>Esc</kbd></button>
+    <header className="case-page-head"><div><p className="eyebrow">{caseItem.id} · {caseItem.branch}</p><h2 id="case-page-title">{caseItem.borrower.name}</h2><StatusPill status={caseItem.status} /></div><div className="case-page-actions">{actionButton()}</div></header>
+    <div className="case-page-body">
     <div className="drawer-section"><p className="section-label">Borrower</p><div className="detail-list"><span><UsersRound size={14} /> {caseItem.borrower.mobile}</span><span><MapPin size={14} /> {caseItem.borrower.address}</span></div></div>
     <div className="drawer-section"><p className="section-label">Vehicle and loan</p><div className="vehicle-card"><span>{caseItem.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><strong>{caseItem.vehicle.registration}</strong><p>{caseItem.vehicle.makeModel}</p></div></div><dl className="detail-grid"><div><dt>Pending amount</dt><dd>{formatCurrency(caseItem.pendingAmount)}</dd></div><div><dt>Overdue</dt><dd>{caseItem.overdueDays} days</dd></div><div><dt>Loan account</dt><dd>{caseItem.accountNumber}</dd></div><div><dt>Chassis</dt><dd>{caseItem.vehicle.chassis}</dd></div></dl>{session.user.permissions.includes('account.manage') && caseItem.status === 'imported' && !caseItem.authority && <button className="text-button edit-account" onClick={() => onOpenDialog('edit-account')}>Edit account before approval <ChevronRight size={14} /></button>}</div>
     <div className="drawer-section"><p className="section-label">Recovery authority</p>{caseItem.authority ? <div className="payment-detail"><ShieldCheck size={16} /><div><strong>Approved by finance</strong><span>{caseItem.authority.documentName}</span><small>{new Date(caseItem.authority.approvedAt).toLocaleString()}</small></div></div> : <div className="evidence-empty">No authority document approved yet.</div>}{caseItem.authority && caseItem.status === 'imported' && session.user.permissions.includes('authority.approve') && <button className="text-button" onClick={onRevokeAuthority}>Revoke authority to edit account <ChevronRight size={14} /></button>}</div>
-    <div className="drawer-section"><p className="section-label">Assigned agents</p>{(caseItem.assignedAgents && caseItem.assignedAgents.length) ? <div className="assigned-agents">{caseItem.assignedAgents.map((agent) => <span key={agent.id} className="agent-chip">{agent.name}</span>)}</div> : <div className="evidence-empty">No agents assigned yet.</div>}{session.user.permissions.includes('case.assign') && caseItem.status !== 'closed' && Boolean(caseItem.authority) && <button className="text-button" onClick={() => onOpenDialog('assign')}>Manage agents <ChevronRight size={14} /></button>}</div>
+    <div className="drawer-section"><p className="section-label">Assigned agents</p>{(caseItem.assignedAgents && caseItem.assignedAgents.length) ? <div className="assigned-agents">{caseItem.assignedAgents.map((agent) => <span key={agent.id} className="agent-chip">{agent.name}</span>)}</div> : <div className="evidence-empty">No agents assigned yet.</div>}{session.user.permissions.includes('case.assign') && caseItem.status !== 'closed' && Boolean(caseItem.authority) && <button className="text-button" onClick={() => onOpenDialog('assign')}>Manage agents <ChevronRight size={14} /></button>}{caseItem.openOfferAt ? <div className="offer-note"><Megaphone size={15} /><span>Offered to all active agents {new Date(caseItem.openOfferAt).toLocaleString('en-IN')}. The first to accept gets it.</span>{session.user.permissions.includes('case.assign') && <button className="text-button" onClick={() => onOffer(true)}>Withdraw offer</button>}</div> : canOffer && <button className="text-button" onClick={() => onOffer(false)}><Megaphone size={14} /> Offer to all active agents</button>}</div>
     <CaseAgentPanel caseItem={caseItem} session={session} onChanged={onChanged} />
     {caseItem.failure && <div className="failure-note"><span>!</span><div><strong>{caseItem.failure.reason}</strong><p>{caseItem.failure.note}</p><small>{caseItem.failure.recordedAt}</small></div></div>}
     {(evidenceLoading || evidence.length > 0) && <EvidencePanel evidence={evidence} loading={evidenceLoading} token={session.token} />}
     {custody && <div className="drawer-section"><p className="section-label">Digital parking check slip</p><div className="custody-summary"><PackageCheck size={17} /><div><strong>{custody.id}</strong><p>{custody.yardName}</p><small>{custody.agentName} · ₹{custody.parkingRate}/day · {new Date(custody.arrivalTime).toLocaleString()}</small><MapsLink latitude={custody.latitude} longitude={custody.longitude} /></div></div>{custody.inspection && <div className="inspection-summary">{Object.entries(custody.inspection).map(([item, condition]) => <span key={item}><strong>{item}</strong><small>{condition}</small></span>)}</div>}{custody.customNote && <p className="custody-agent-note"><strong>Agent note</strong>{custody.customNote}</p>}{custody.financeReviewedAt && <div className="payment-detail"><Check size={16} /><div><strong>Approved by finance</strong><span>{custody.financeReviewNote || 'Custody report accepted'}</span><small>{new Date(custody.financeReviewedAt).toLocaleString()}</small></div></div>}</div>}
     {caseItem.paymentReference && <div className="drawer-section"><p className="section-label">Finance payment confirmation</p><div className="payment-detail"><Check size={16} /><div><strong>Dues marked cleared</strong><span>{caseItem.paymentReference}</span><small>{caseItem.paymentConfirmedAt ? new Date(caseItem.paymentConfirmedAt).toLocaleString() : ''}</small></div></div></div>}
     {releasePass && <div className="drawer-section"><p className="section-label">Customer release token</p><div className="pass-summary"><FileCheck2 size={17} /><div><strong>{releasePass.id}</strong><span>Verification code: {releasePass.verificationCode}</span><small>Issued {new Date(releasePass.issuedAt).toLocaleString()}</small></div></div>{releasePass.lifecycle && releasePass.lifecycle !== 'valid' && <p style={{ margin: '8px 0 0', fontWeight: 800, fontSize: 11, color: releasePass.lifecycle === 'revoked' ? '#be4e4b' : '#a35f0c' }}>{releasePass.lifecycle === 'revoked' ? 'Revoked — no longer valid' : releasePass.lifecycle === 'redeemed' ? 'Redeemed — vehicle released' : 'Expired'}</p>}{(!releasePass.lifecycle || releasePass.lifecycle === 'valid') && session.user.permissions.includes('release.revoke') && <button className="text-button" onClick={onRevokeRelease}>Revoke this pass</button>}</div>}
-    <div className="drawer-footer">{actionButton()}</div>
-  </aside></>;
+    </div>
+  </article>;
 }
 
 function EvidencePanel({ evidence, loading, token }: { evidence: EvidenceRecord[]; loading: boolean; token: string }) {

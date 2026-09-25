@@ -110,3 +110,6 @@
 .field-settings-form input:disabled{font-size:15px}
 .field-notice,.field-offline{font-size:11px}
 .field-footer-note{font-size:11px}
+
+/* Open-case offers in the agent app */
+.offer-row{align-items:center}.offer-row .field-primary{width:auto;min-height:40px;padding:0 16px}.offer-confirm{display:flex;gap:6px;flex:none}.offer-confirm .field-secondary{width:auto;min-height:40px;padding:0 12px}

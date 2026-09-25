@@ -17,12 +17,12 @@ import { PERMISSIONS, PLATFORM_MANAGE, hasPermission, permissionsForRole } from 
 import { billingSummary, decideTopup, mapTopup, platformSettings, requestTopup } from './billing.mjs';
 import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
-import { agentRates, createAgent, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
+import { agentRates, createAgent, listAgentCases, notSuspendedBy, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
 import { rateAgent, ratingSummaries } from './agent-ratings.mjs';
 import { VERIFICATION_PHOTOS, assignVerification, cancelVerification, createVerification, listVerifications, mapVerification, validateVerificationSubmission } from './verification.mjs';
 import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
 import { createAccount, normalizeAccountRows, updateAccount } from './account-management.mjs';
-import { createApiKey, findActiveApiKey, listApiKeys, revokeApiKey } from './api-keys.mjs';
+import { apiKeyAllowance, createApiKey, decideApiKeyRequest, findActiveApiKey, listApiKeys, mapKeyRequest, requestExtraApiKey, revokeApiKey } from './api-keys.mjs';
 import { casesToCsv } from './report-export.mjs';
 import { createFinanceMember, setFinanceMemberActive } from './member-management.mjs';
 import { readLocation, validateAttempt, validateCustody, validateFieldCase } from './field-validation.mjs';
@@ -123,6 +123,7 @@ function mapCase(row, assignedAgents = []) {
     updatedAt: row.updated_at,
     createdAt: row.created_at ?? row.updated_at,
     billingLocked: Boolean(row.billing_locked),
+    openOfferAt: row.open_offer_at ?? undefined,
     agentVisibility: { customer: row.share_customer !== 0, vehicle: row.share_vehicle !== 0 },
     finance: row.finance_company ? { company: row.finance_company, contactName: row.finance_contact_name ?? undefined, contactMobile: row.finance_contact_mobile ? formatMobile(row.finance_contact_mobile) : undefined } : undefined,
     custodyId: row.custody_id ?? undefined,
@@ -182,7 +183,7 @@ async function caseForUser(id, user) {
   if (!row) return null;
   if (user.role === 'agent') {
     // An agent reaches a case through an active co-assignment, in whichever tenant owns it.
-    const assigned = await queryOne(pool, 'SELECT 1 AS x FROM case_assignments WHERE case_id = ? AND agent_user_id = ? AND active = 1', [id, user.id]);
+    const assigned = await queryOne(pool, `SELECT 1 AS x FROM case_assignments WHERE case_id = ? AND agent_user_id = ? AND active = 1 AND ${notSuspendedBy('?')}`, [id, user.id, user.id, row.tenant_id]);
     return assigned ? row : null;
   }
   return row.tenant_id === user.tenantId ? row : null;
@@ -315,9 +316,7 @@ app.post('/api/auth/logout', auth, async (req, res) => {
 app.get('/api/workspace', auth, async (req, res) => {
   const isAgent = req.user.role === 'agent';
   const caseRows = isAgent
-    ? await query(pool, `SELECT rc.*, t.name AS finance_company, fu.name AS finance_contact_name, fu.mobile AS finance_contact_mobile
-        FROM recovery_cases rc JOIN case_assignments ca ON ca.case_id = rc.id AND ca.agent_user_id = ? AND ca.active = 1
-        JOIN tenants t ON t.id = rc.tenant_id LEFT JOIN users fu ON fu.id = ca.assigned_by_user_id ORDER BY rc.updated_at DESC`, [req.user.id])
+    ? await listAgentCases(pool, req.user.id)
     : await query(pool, 'SELECT * FROM recovery_cases WHERE tenant_id = ? ORDER BY updated_at DESC', [req.user.tenantId]);
   const visibleCaseIds = caseRows.map((row) => row.id);
   const custodyRows = isAgent
@@ -342,7 +341,7 @@ app.get('/api/workspace', auth, async (req, res) => {
   const agentsByCase = new Map();
   for (const row of assignmentRows) { const list = agentsByCase.get(row.case_id) || []; list.push({ id: row.agent_user_id, name: row.name, stars: row.stars ?? undefined }); agentsByCase.set(row.case_id, list); }
   const groups = isAgent ? [] : await listGroups({ database: pool, tenantId: req.user.tenantId });
-  res.json({ cases: caseRows.map((row) => { const item = mapCase(row, agentsByCase.get(row.id) || []); return isAgent ? redactForAgent(item) : item; }), custody: custodyRows.map(mapCustody), agents: agentData, groups, verifications: (await listVerifications(pool, req.user)).map((row) => mapVerification(row, formatMobile)), notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
+  res.json({ cases: caseRows.map((row) => { const item = mapCase(row, agentsByCase.get(row.id) || []); return isAgent ? redactForAgent(item) : item; }), custody: custodyRows.map(mapCustody), agents: agentData, groups, verifications: (await listVerifications(pool, req.user)).map((row) => mapVerification(row, formatMobile)), openOffers: isAgent ? (await listOpenOffers(req.user.id)).map(mapOffer) : [], notifications: notificationRows.map(mapNotification), releasePasses: releasePassRows.map((row) => mapReleasePass(row, lifecycleByPass.get(row.id) || 'valid')) });
 });
 
 app.post('/api/agents', auth, requirePermission(PERMISSIONS.AGENT_MANAGE), async (req, res) => {
@@ -552,11 +551,15 @@ app.get('/api/platform/overview', auth, requirePlatform, async (_req, res) => {
     FROM tenants LEFT JOIN wallets w ON w.tenant_id = tenants.id LEFT JOIN billing_charges c ON c.tenant_id = tenants.id
     WHERE tenants.archived_at IS NULL
     GROUP BY tenants.id, tenants.name, w.balance_paise ORDER BY tenants.name`);
+  const keyRequests = await query(pool, `SELECT r.*, tenants.name AS tenant_name, users.name AS requested_by_name FROM api_key_requests r
+    JOIN tenants ON tenants.id = r.tenant_id JOIN users ON users.id = r.requested_by_user_id
+    ORDER BY r.status = 'pending' DESC, r.created_at DESC LIMIT 100`);
   const settings = await platformSettings(pool);
   res.json({
+    keyRequests: keyRequests.map(mapKeyRequest),
     topups: topups.map(mapTopup),
     tenants: tenants.map((row) => ({ id: row.id, name: row.name, balancePaise: Number(row.balance_paise), duePaise: Number(row.due_paise), lockedCount: Number(row.locked_count), chargedCount: Number(row.charged_count) })),
-    settings: { vehicleRowPaise: Number(settings.vehicle_row_paise), verificationFeePaise: Number(settings.verification_fee_paise), paymentInstructions: settings.payment_instructions ?? '' },
+    settings: { vehicleRowPaise: Number(settings.vehicle_row_paise), verificationFeePaise: Number(settings.verification_fee_paise), apiKeyFeePaise: Number(settings.api_key_fee_paise), paymentInstructions: settings.payment_instructions ?? '' },
   });
 });
 
@@ -577,12 +580,94 @@ app.post('/api/platform/topups/:id/decision', auth, requirePlatform, async (req,
 app.put('/api/platform/settings', auth, requirePlatform, async (req, res) => {
   const vehicleRowPaise = Math.round(Number(req.body?.vehicleRowRupees) * 100);
   const verificationFeePaise = Math.round(Number(req.body?.verificationFeeRupees) * 100);
+  const apiKeyFeePaise = Math.round(Number(req.body?.apiKeyFeeRupees) * 100);
   const paymentInstructions = String(req.body?.paymentInstructions ?? '').trim();
   const validPrice = (value) => Number.isInteger(value) && value >= 0 && value <= 10_000_000;
-  if (!validPrice(vehicleRowPaise) || !validPrice(verificationFeePaise)) return res.status(422).json({ error: 'Prices must be between ₹0 and ₹1,00,000.' });
+  if (!validPrice(vehicleRowPaise) || !validPrice(verificationFeePaise) || !validPrice(apiKeyFeePaise)) return res.status(422).json({ error: 'Prices must be between ₹0 and ₹1,00,000.' });
   if (paymentInstructions.length > 2000) return res.status(422).json({ error: 'Keep payment instructions within 2,000 characters.' });
-  await query(pool, 'UPDATE platform_settings SET vehicle_row_paise = ?, verification_fee_paise = ?, payment_instructions = ?, updated_at = ? WHERE id = 1', [vehicleRowPaise, verificationFeePaise, paymentInstructions || null, isoNow()]);
-  res.json({ settings: { vehicleRowPaise, verificationFeePaise, paymentInstructions } });
+  await query(pool, 'UPDATE platform_settings SET vehicle_row_paise = ?, verification_fee_paise = ?, api_key_fee_paise = ?, payment_instructions = ?, updated_at = ? WHERE id = 1', [vehicleRowPaise, verificationFeePaise, apiKeyFeePaise, paymentInstructions || null, isoNow()]);
+  res.json({ settings: { vehicleRowPaise, verificationFeePaise, apiKeyFeePaise, paymentInstructions } });
+});
+
+app.post('/api/platform/api-key-requests/:id/decision', auth, requirePlatform, async (req, res) => {
+  const approve = req.body?.decision === 'approve';
+  if (!approve && req.body?.decision !== 'reject') return res.status(422).json({ error: 'Choose approve or reject.' });
+  try {
+    const result = await decideApiKeyRequest({ database: pool, requestId: req.params.id, adminUserId: req.user.id, approve });
+    await addAudit(pool, { tenantId: result.tenantId, actorUserId: req.user.id, action: approve ? 'api_key.request_approved' : 'api_key.request_rejected', detail: approve ? `Additional API key approved; ₹${result.feePaise / 100} charged.` : 'Additional API key request rejected.' });
+    await addNotification(pool, { tenantId: result.tenantId, title: approve ? 'Additional API key approved' : 'API key request rejected', detail: approve ? `You can now create one more API key in Settings. ₹${result.feePaise / 100} was charged to your wallet.` : 'Your request for an additional API key was not approved. Contact Handoff support for details.', tone: approve ? 'green' : 'amber' });
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The request could not be decided.';
+    return res.status(/not found/i.test(message) ? 404 : 422).json({ error: message });
+  }
+});
+
+// ---- Open offers: send an unassigned case to every active roster agent; the first to accept is assigned ----
+const OFFERABLE_STATUSES = ['imported', 'unable_to_recover'];
+const offerError = (status, message) => Object.assign(new Error(message), { status });
+
+async function listOpenOffers(agentId) {
+  return query(pool, `SELECT rc.id, rc.vehicle_type, rc.make_model, rc.registration, rc.branch, rc.share_vehicle, rc.open_offer_at, t.name AS finance_company
+      FROM recovery_cases rc
+      JOIN agent_memberships m ON m.tenant_id = rc.tenant_id AND m.agent_user_id = ? AND m.active = 1
+      JOIN tenants t ON t.id = rc.tenant_id
+     WHERE rc.open_offer_at IS NOT NULL AND rc.billing_locked = 0 AND rc.status IN (?)
+       AND NOT EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = rc.id AND ca.active = 1)
+     ORDER BY rc.open_offer_at DESC`, [agentId, OFFERABLE_STATUSES]);
+}
+
+// Before accepting, an agent sees only enough to decide: never the borrower's details.
+function mapOffer(row) {
+  return { id: row.id, financeCompany: row.finance_company, branch: row.branch, offeredAt: row.open_offer_at, vehicle: { type: row.vehicle_type, registration: row.registration, makeModel: row.share_vehicle === 0 ? '' : row.make_model } };
+}
+
+app.post('/api/cases/:id/offer', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const actionError = validateCaseAction('assign', caseRow);
+  if (actionError) return res.status(422).json({ error: actionError });
+  const withAgent = await queryOne(pool, 'SELECT 1 FROM case_assignments WHERE case_id = ? AND active = 1 LIMIT 1', [caseRow.id]);
+  if (withAgent || !OFFERABLE_STATUSES.includes(caseRow.status)) return res.status(422).json({ error: 'Only a case with no agent can be offered to all agents.' });
+  const agents = await query(pool, "SELECT users.id FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.tenant_id = ? AND m.active = 1 AND users.active = 1 AND users.role = 'agent'", [req.user.tenantId]);
+  if (!agents.length) return res.status(422).json({ error: 'Add active agents to your roster first.' });
+  const offeredAt = isoNow();
+  await tx(pool, async (conn) => {
+    await query(conn, 'UPDATE recovery_cases SET open_offer_at = ?, open_offer_by_user_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?', [offeredAt, req.user.id, offeredAt, caseRow.id, req.user.tenantId]);
+    for (const agent of agents) await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: agent.id, title: 'Open case available', detail: `${caseRow.registration} (${caseRow.branch}) is open. The first agent to accept gets it.`, tone: 'blue' });
+    await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.offered', detail: `Offered to ${agents.length} active agent(s).` });
+  });
+  res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), notified: agents.length });
+});
+
+app.delete('/api/cases/:id/offer', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  await query(pool, 'UPDATE recovery_cases SET open_offer_at = NULL, open_offer_by_user_id = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?', [isoNow(), caseRow.id, req.user.tenantId]);
+  await addAudit(pool, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.offer_withdrawn', detail: 'Open offer withdrawn.' });
+  res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
+});
+
+app.post('/api/cases/:id/accept-offer', auth, requirePermission(PERMISSIONS.ASSIGNMENT_RESPOND), async (req, res, next) => {
+  try {
+    const body = await tx(pool, async (conn) => {
+      const caseRow = await queryOne(conn, 'SELECT * FROM recovery_cases WHERE id = ? FOR UPDATE', [req.params.id]);
+      const member = caseRow && await queryOne(conn, 'SELECT 1 FROM agent_memberships WHERE tenant_id = ? AND agent_user_id = ? AND active = 1', [caseRow.tenant_id, req.user.id]);
+      if (!caseRow || !member) throw offerError(404, 'Case not found.');
+      const taken = await queryOne(conn, 'SELECT 1 FROM case_assignments WHERE case_id = ? AND active = 1 LIMIT 1', [caseRow.id]);
+      if (!caseRow.open_offer_at || taken || caseRow.billing_locked || !OFFERABLE_STATUSES.includes(caseRow.status)) throw offerError(409, 'This case is no longer open. Another agent may have accepted it.');
+      const acceptedAt = isoNow();
+      await query(conn, 'INSERT INTO case_assignments (tenant_id, case_id, agent_user_id, assigned_at, assigned_by_user_id, note, active) VALUES (?, ?, ?, ?, ?, ?, 1)', [caseRow.tenant_id, caseRow.id, req.user.id, acceptedAt, caseRow.open_offer_by_user_id, caseRow.assignment_note]);
+      await query(conn, "UPDATE recovery_cases SET status = 'assigned', assigned_agent_user_id = ?, assigned_at = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL, open_offer_at = NULL, open_offer_by_user_id = NULL WHERE id = ?", [req.user.id, acceptedAt, acceptedAt, caseRow.id]);
+      await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: 'Open case accepted', detail: `${req.user.name} accepted ${caseRow.id} (${caseRow.registration}).`, tone: 'green' });
+      await addAudit(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.offer_accepted', detail: `${req.user.name} accepted the open case.` });
+      return { caseId: caseRow.id };
+    });
+    return res.json(body);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
 });
 
 app.put('/api/cases/:id/agent-visibility', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async (req, res) => {
@@ -613,7 +698,11 @@ app.post('/api/ratings', auth, requirePermission(PERMISSIONS.CASE_ASSIGN), async
 async function verificationForUser(id, user) {
   const request = await queryOne(pool, 'SELECT * FROM verification_requests WHERE id = ?', [id]);
   if (!request) return null;
-  if (user.role === 'agent') return request.assigned_agent_user_id === user.id ? request : null;
+  if (user.role === 'agent') {
+    if (request.assigned_agent_user_id !== user.id) return null;
+    const suspended = await queryOne(pool, 'SELECT 1 FROM agent_memberships WHERE agent_user_id = ? AND tenant_id = ? AND active = 0', [user.id, request.tenant_id]);
+    return suspended ? null : request;
+  }
   return request.tenant_id === user.tenantId ? request : null;
 }
 
@@ -716,7 +805,17 @@ app.get('/api/verification-evidence/:id/file', auth, async (req, res) => {
 
 // ---- API keys: management (tenant owner) and the external v1 API ----
 app.get('/api/api-keys', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
-  res.json({ keys: await listApiKeys(pool, req.user.tenantId) });
+  res.json({ keys: await listApiKeys(pool, req.user.tenantId), allowance: await apiKeyAllowance(pool, req.user.tenantId) });
+});
+
+app.post('/api/api-keys/requests', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
+  try {
+    const request = await requestExtraApiKey({ database: pool, tenantId: req.user.tenantId, userId: req.user.id, reason: req.body?.reason });
+    await addAudit(pool, { tenantId: req.user.tenantId, actorUserId: req.user.id, action: 'api_key.requested', detail: 'Requested approval for an additional API key.' });
+    return res.status(201).json({ request });
+  } catch (error) {
+    return res.status(422).json({ error: error instanceof Error ? error.message : 'The request could not be sent.' });
+  }
 });
 
 app.post('/api/api-keys', auth, requirePermission(PERMISSIONS.ORGANIZATION_MANAGE), async (req, res) => {
@@ -855,7 +954,7 @@ app.put('/api/cases/:id/assignment', auth, requirePermission(PERMISSIONS.CASE_AS
       await query(conn, 'INSERT INTO case_assignments (tenant_id, case_id, agent_user_id, assigned_at, assigned_by_user_id, note, active) VALUES (?, ?, ?, ?, ?, ?, 1)', [req.user.tenantId, caseRow.id, id, updatedAt, req.user.id, assignmentNote || null]);
       await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: id, caseId: caseRow.id, title: 'New recovery case assigned', detail: `${caseRow.id} has been assigned to you by the finance team.`, tone: 'blue' });
     }
-    await query(conn, "UPDATE recovery_cases SET status = 'assigned', assigned_agent_user_id = ?, assigned_at = ?, assignment_note = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL WHERE id = ? AND tenant_id = ?",
+    await query(conn, "UPDATE recovery_cases SET status = 'assigned', assigned_agent_user_id = ?, assigned_at = ?, assignment_note = ?, updated_at = ?, failure_reason = NULL, failure_note = NULL, failure_recorded_at = NULL, open_offer_at = NULL, open_offer_by_user_id = NULL WHERE id = ? AND tenant_id = ?",
       [agentIds[0], updatedAt, assignmentNote || null, updatedAt, caseRow.id, req.user.tenantId]);
     await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.assigned', detail: `Assigned to ${agentIds.map((id) => nameById.get(id)).join(', ')}.${assignmentNote ? ` Instruction: ${assignmentNote}` : ''}` });
   });

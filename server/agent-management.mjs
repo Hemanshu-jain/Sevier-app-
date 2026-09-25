@@ -66,15 +66,26 @@ export async function linkAgent({ database, tenantId, agentId, addedByUserId = n
 }
 
 // Enable/disable an agent in this financer's roster (per-membership, not global).
+// SQL condition: the agent (bound as the next ?) is not suspended by the tenant in `tenantColumn`.
+export function notSuspendedBy(tenantColumn) {
+  return `NOT EXISTS (SELECT 1 FROM agent_memberships sm WHERE sm.agent_user_id = ? AND sm.tenant_id = ${tenantColumn} AND sm.active = 0)`;
+}
+
+// The agent's active assignments across financers, with the finance company and the person who assigned it.
+export async function listAgentCases(database, agentId) {
+  return query(database, `SELECT rc.*, t.name AS finance_company, fu.name AS finance_contact_name, fu.mobile AS finance_contact_mobile
+      FROM recovery_cases rc JOIN case_assignments ca ON ca.case_id = rc.id AND ca.agent_user_id = ? AND ca.active = 1
+      JOIN tenants t ON t.id = rc.tenant_id LEFT JOIN users fu ON fu.id = ca.assigned_by_user_id
+     WHERE ${notSuspendedBy('rc.tenant_id')} ORDER BY rc.updated_at DESC`, [agentId, agentId]);
+}
+
 export async function setAgentActive({ database, tenantId, agentId, active }) {
   const membership = await queryOne(database,
     'SELECT users.id, users.name, users.mobile, users.city FROM agent_memberships m JOIN users ON users.id = m.agent_user_id WHERE m.agent_user_id = ? AND m.tenant_id = ?',
     [agentId, tenantId]);
   if (!membership) throw new Error('Agent not found.');
-  if (!active) {
-    const assigned = await queryOne(database, 'SELECT COUNT(*) AS count FROM case_assignments WHERE tenant_id = ? AND agent_user_id = ? AND active = 1', [tenantId, agentId]);
-    if (assigned.count > 0) throw new Error('Reassign or close the agent’s active cases before removing them.');
-  }
+  // Suspension is allowed at any time: it hides this financer's cases from the agent (see NOT_SUSPENDED)
+  // while keeping the assignments, so reactivating restores them and finance can still reassign.
   await query(database, 'UPDATE agent_memberships SET active = ? WHERE agent_user_id = ? AND tenant_id = ?', [active ? 1 : 0, agentId, tenantId]);
   return { id: membership.id, name: membership.name, mobile: membership.mobile, city: membership.city, active: Boolean(active) };
 }

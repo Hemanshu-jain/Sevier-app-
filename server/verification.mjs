@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { query, queryOne, tx } from './mysql.mjs';
 import { chargeItems, platformSettings } from './billing.mjs';
 import { normalizeIndiaMobile } from './otp-service.mjs';
+import { notSuspendedBy } from './agent-management.mjs';
 
 // House / location verification. Schema: migrations/014_verification.sql.
 export const VERIFICATION_PHOTOS = { min: 2, max: 4 };
@@ -80,7 +81,7 @@ export async function listVerifications(database, user) {
     return query(database,
       `SELECT v.*, t.name AS finance_company, fu.name AS finance_contact_name, fu.mobile AS finance_contact_mobile, NULL AS agent_name
          FROM verification_requests v JOIN tenants t ON t.id = v.tenant_id LEFT JOIN users fu ON fu.id = v.assigned_by_user_id
-        WHERE v.assigned_agent_user_id = ? AND v.status IN ('assigned', 'submitted') ORDER BY v.updated_at DESC`, [user.id]);
+        WHERE v.assigned_agent_user_id = ? AND v.status IN ('assigned', 'submitted') AND ${notSuspendedBy('v.tenant_id')} ORDER BY v.updated_at DESC`, [user.id, user.id]);
   }
   return query(database,
     `SELECT v.*, a.name AS agent_name, r.stars AS agent_stars FROM verification_requests v

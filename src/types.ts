@@ -34,6 +34,15 @@ export interface Agent {
   rates?: AgentRates;
 }
 
+// An unassigned case offered to every active agent; details stay hidden until an agent accepts.
+export interface OpenOffer {
+  id: string;
+  financeCompany: string;
+  branch: string;
+  offeredAt: string;
+  vehicle: { type: '2-wheeler' | '4-wheeler'; registration: string; makeModel: string };
+}
+
 export type VerificationStatus = 'open' | 'assigned' | 'submitted' | 'cancelled';
 
 export interface VerificationRequest {
@@ -87,6 +96,7 @@ export interface RecoveryCase {
   updatedAt: string;
   createdAt: string;
   billingLocked?: boolean;
+  openOfferAt?: string;
   custodyId?: string;
   failure?: { reason: AttemptReason; note: string; recordedAt: string };
   paymentCleared?: boolean;

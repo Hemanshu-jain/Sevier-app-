@@ -208,3 +208,77 @@ button,input,textarea,select { font:inherit; } button { cursor:pointer; } button
 @media(max-width:760px){.recharge-options{grid-template-columns:1fr}}
 th{font-size:11px;letter-spacing:.3px}
 @media(max-width:760px){.count-strip{grid-template-columns:repeat(2,1fr)}.count-strip>:nth-child(2){border-right:0}.count-strip>:nth-child(-n+2){border-bottom:1px solid var(--line)}}
+
+/* ---- UI batch 2026-09-25: collapsible sidebar, compact shell, settings, application page, readable custody ---- */
+@media screen and (min-width:761px){
+  /* Icons only until hovered or keyboard-focused; opening pushes the page instead of covering it. */
+  .sidebar{width:68px;padding:18px 10px 14px;overflow:hidden;transition:width .16s ease}
+  .main-area{margin-left:68px;transition:margin-left .16s ease}
+  .nav-expanded .sidebar{width:248px}
+  .nav-expanded .main-area{margin-left:248px}
+  .sidebar .nav-link,.workspace-label,.profile{white-space:nowrap}
+  /* Collapsed: icons and avatar only, never half-clipped words. */
+  .app-shell:not(.nav-expanded) .workspace-label,.app-shell:not(.nav-expanded) .nav-link b,.app-shell:not(.nav-expanded) .nav-link span,.app-shell:not(.nav-expanded) .profile-text,.app-shell:not(.nav-expanded) .profile-action{visibility:hidden}
+  .topbar{height:60px;padding:8px 24px}
+  .content-area{max-width:1600px;padding:18px 22px 28px}
+}
+.brand{padding:0 6px;overflow:hidden}
+.nav-link{font-size:13px}
+.workspace-label{font-size:11px;margin:24px 8px 10px;overflow:hidden;text-overflow:ellipsis}
+.profile{display:flex;align-items:center;gap:6px;border-top:1px solid rgba(255,255,255,.1);padding:12px 4px 0;margin-top:6px}
+.profile-text{flex:1;min-width:0}.profile-text strong{font-size:12px}.profile-text small{font-size:11px;text-transform:capitalize}
+.profile-action{flex:none;display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:7px;background:transparent;color:#aebfd6}
+.profile-action:hover,.profile-action.active{background:rgba(255,255,255,.1);color:#fff}
+.profile .profile-action svg{margin:0;color:inherit}
+.topbar h1{font-size:16px}
+.wallet-chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-weight:700;font-size:13px}
+.wallet-chip svg{color:var(--blue)}.wallet-chip:hover{border-color:var(--blue)}
+.flash-toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;align-items:center;gap:8px;background:var(--navy);color:#fff;border-radius:8px;padding:10px 14px;font-size:13px;box-shadow:0 6px 20px rgba(16,24,40,.18)}
+.flash-toast svg{color:#8fd3b4}
+.count-strip>button{cursor:pointer}
+.count-strip>button.active{background:var(--blue-soft);box-shadow:inset 0 -2px 0 var(--blue)}
+
+/* Settings: section list + one panel, even spacing between cards */
+.settings-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:20px;align-items:start}
+.settings-nav{display:grid;gap:4px;position:sticky;top:16px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:6px}
+.settings-nav button{display:flex;align-items:center;gap:10px;border:0;background:transparent;border-radius:7px;padding:10px 12px;font-weight:700;font-size:13px;color:var(--muted);text-align:left}
+.settings-nav button:hover{background:var(--page);color:var(--ink)}
+.settings-nav button.active{background:var(--blue-soft);color:var(--blue)}
+.settings-panel{display:grid;gap:16px;min-width:0}
+.settings-panel>*{margin-top:0;margin-bottom:0}
+.settings-grid{gap:16px}
+.settings-card h3{font-size:14px}.settings-card p{font-size:12px}
+.capitalize{text-transform:capitalize}
+.key-usage{font-size:13px;color:var(--muted);margin:8px 0 12px}.key-usage strong{color:var(--ink)}
+.key-request{display:grid;gap:10px;border:1px dashed #cfd4dc;border-radius:8px;padding:12px 14px;margin:12px 0}
+.key-request.pending{border-style:solid;background:var(--amber-soft);color:var(--amber)}.key-request span{font-size:12px}
+@media(max-width:900px){.settings-layout{grid-template-columns:1fr}.settings-nav{position:static;grid-auto-flow:column;overflow-x:auto}}
+
+/* Application / verification detail as a full page */
+.case-page{display:grid;gap:14px}
+.back-link{justify-self:start;display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--blue);font-weight:700;font-size:13px;padding:4px 0}
+.back-link kbd{font:10px DM Mono,monospace;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--muted)}
+.case-page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 20px}
+.case-page-head h2{font-size:24px;letter-spacing:-.6px;margin:2px 0 8px}
+.case-page-actions{width:min(340px,100%)}
+.case-page-body{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;align-items:start}
+.case-page-body>div{border:1px solid var(--line);border-radius:10px;padding:14px 18px;background:#fff}
+.case-page .section-label{font-size:12px}
+.case-page .detail-list span{font-size:13px}
+.case-page .vehicle-card strong{font-size:16px}
+.offer-note{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--blue-soft);color:var(--blue);font-size:12px;font-weight:600}.offer-note span{flex:1}
+@media(max-width:760px){.case-page-head{flex-direction:column}.case-page-actions{width:100%}.case-page-body{grid-template-columns:1fr}}
+
+/* Readable record details (custody review, application page) */
+.detail-grid dt{font-size:11px;color:var(--muted)}
+.detail-grid dd{font-size:13px;color:var(--ink);font-weight:700}
+.inspection-summary{gap:8px}.inspection-summary span{padding:8px 10px}
+.inspection-summary strong{font-size:12px;color:var(--ink)}.inspection-summary small{font-size:12px}
+.custody-workspace{grid-template-columns:320px minmax(0,1fr)}
+.custody-list-top strong{font-size:14px}.custody-list-row small{font-size:12px}
+.custody-detail{padding:22px 24px;gap:16px}
+.custody-detail-head h3{font-size:24px}.custody-detail-head .page-copy{font-size:13px}
+.custody-agent-note{font-size:13px}
+.evidence-row strong{font-size:13px}.evidence-row small{font-size:12px}
+.section-label{font-size:11px}
+@media(max-width:900px){.custody-workspace{grid-template-columns:1fr}}

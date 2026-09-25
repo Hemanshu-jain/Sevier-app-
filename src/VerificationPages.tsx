@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Camera, Check, ChevronRight, Lock, MapPin, Plus, Star, X } from 'lucide-react';
+import { ArrowLeft, Camera, Check, ChevronRight, Lock, MapPin, Plus, Star, X } from 'lucide-react';
 import { api } from './api';
 import type { Session, VerificationInput } from './api';
 import type { Agent, EvidenceRecord, VerificationRequest } from './types';
@@ -28,22 +28,26 @@ export function VerificationTab({ verifications, agents, session, onChanged }: {
   const canCreate = session.user.permissions.includes('case.create');
   const selected = verifications.find((item) => item.id === selectedId) ?? null;
   const start = monthStart();
+  const [filter, setFilter] = useState<'month' | 'all' | 'open' | 'submitted'>('all');
+  const matches = (item: VerificationRequest) => filter === 'all' || (filter === 'month' ? new Date(item.createdAt) >= start : item.status === filter);
+  const kpi = (id: typeof filter, value: number, label: string) => <button type="button" aria-pressed={filter === id} className={filter === id ? 'active' : ''} onClick={() => setFilter(id)}><strong>{value}</strong><span>{label}</span></button>;
+
+  if (selected) return <VerificationDrawer item={selected} agents={agents} session={session} onClose={() => setSelectedId(null)} onChanged={onChanged} />;
 
   return <>
     <div className="page-heading"><div><p className="eyebrow">House verification</p><h2>Location verification requests</h2><p className="page-copy">An agent visits the customer's residence, captures GPS and 2 to 4 photos, and reports whether the address is correct.</p></div><div className="heading-actions">{canCreate && <button className="primary-button" onClick={() => setCreating(true)}><Plus size={16} /> New verification request</button>}</div></div>
     {notice && <div className="app-notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={14} /></button></div>}
     <section className="count-strip">
-      <div><strong>{verifications.filter((item) => new Date(item.createdAt) >= start).length}</strong><span>Requests this month</span></div>
-      <div><strong>{verifications.length}</strong><span>All requests</span></div>
-      <div><strong>{verifications.filter((item) => item.status === 'open').length}</strong><span>Waiting for an agent</span></div>
-      <div><strong>{verifications.filter((item) => item.status === 'submitted').length}</strong><span>Submitted</span></div>
+      {kpi('month', verifications.filter((item) => new Date(item.createdAt) >= start).length, 'Requests this month')}
+      {kpi('all', verifications.length, 'All requests')}
+      {kpi('open', verifications.filter((item) => item.status === 'open').length, 'Waiting for an agent')}
+      {kpi('submitted', verifications.filter((item) => item.status === 'submitted').length, 'Submitted')}
     </section>
-    <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Customer</th><th>City</th><th>Agent</th><th>Status</th><th>Requested</th><th /></tr></thead><tbody>{verifications.length ? verifications.map((item) => item.billingLocked
+    <article className="card data-card"><div className="table-scroll"><table className="case-table"><thead><tr><th>Customer</th><th>City</th><th>Agent</th><th>Status</th><th>Requested</th><th /></tr></thead><tbody>{verifications.filter(matches).length ? verifications.filter(matches).map((item) => item.billingLocked
       ? <tr key={item.id} className="row-locked" aria-disabled="true" title="Locked until the wallet is recharged"><td><strong>{item.customer.name}</strong><small>{item.id} · {item.reference}</small></td><td>{item.customer.city}</td><td>—</td><td><span className="lock-badge"><Lock size={12} /> Locked</span></td><td>{new Date(item.createdAt).toLocaleDateString('en-IN')}</td><td /></tr>
       : <tr key={item.id} className="row-action" role="button" tabIndex={0} aria-label={`Open verification ${item.id}`} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(item.id); } }}><td><strong>{item.customer.name}</strong><small>{item.id} · {item.reference}</small></td><td>{item.customer.city}</td><td>{item.assignedAgentName ?? '—'}</td><td><span className={`status-pill ${item.status === 'submitted' ? item.result === 'verified' ? 'green' : 'red' : item.status === 'assigned' ? 'blue' : 'slate'}`}><i />{resultLabel(item)}</span></td><td>{new Date(item.createdAt).toLocaleDateString('en-IN')}</td><td><ChevronRight size={17} /></td></tr>)
-      : <tr><td colSpan={6}><div className="empty-table">No verification requests yet.</div></td></tr>}</tbody></table></div></article>
+      : <tr><td colSpan={6}><div className="empty-table">No verification requests in this view.</div></td></tr>}</tbody></table></div></article>
     {creating && <NewVerificationDialog session={session} onClose={() => setCreating(false)} onCreated={async (message) => { setCreating(false); setNotice(message); await onChanged(); }} />}
-    {selected && <VerificationDrawer item={selected} agents={agents} session={session} onClose={() => setSelectedId(null)} onChanged={onChanged} />}
   </>;
 }
 
@@ -89,6 +93,12 @@ function VerificationDrawer({ item, agents, session, onClose, onChanged }: { ite
     api.verificationEvidence(session.token, item.id).then(({ evidence: records }) => setEvidence(records)).catch((cause) => setError(errorMessage(cause)));
   }, [item.id, item.status, session.token]);
   useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
+  useEffect(() => { window.scrollTo(0, 0); }, [item.id]);
+  useEffect(() => {
+    const backOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.modal-backdrop')) onClose(); };
+    window.addEventListener('keydown', backOnEscape);
+    return () => window.removeEventListener('keydown', backOnEscape);
+  }, [onClose]);
 
   async function run(action: () => Promise<unknown>) {
     setBusy(true); setError('');
@@ -101,9 +111,9 @@ function VerificationDrawer({ item, agents, session, onClose, onChanged }: { ite
 
   const cancel = () => { if (window.confirm('Cancel this verification request? The platform fee is not refunded.')) void run(() => api.cancelVerification(session.token, item.id)); };
 
-  return <><div className="drawer-backdrop" onClick={onClose} /><aside className="case-drawer" role="dialog" aria-modal="true" aria-labelledby="verification-drawer-title">
-    <div className="drawer-top"><div><p className="eyebrow">{item.id} · {item.reference}</p><h2 id="verification-drawer-title">{item.customer.name}</h2></div><button className="close-button" type="button" onClick={onClose} aria-label="Close verification details"><X size={18} /></button></div>
-    <span className={`status-pill ${item.status === 'submitted' ? item.result === 'verified' ? 'green' : 'red' : item.status === 'assigned' ? 'blue' : 'slate'}`}><i />{resultLabel(item)}</span>
+  return <article className="case-page" aria-labelledby="verification-page-title"><button className="back-link" type="button" onClick={onClose}><ArrowLeft size={16} /> Back <kbd>Esc</kbd></button>
+    <header className="case-page-head"><div><p className="eyebrow">{item.id} · {item.reference}</p><h2 id="verification-page-title">{item.customer.name}</h2><span className={`status-pill ${item.status === 'submitted' ? item.result === 'verified' ? 'green' : 'red' : item.status === 'assigned' ? 'blue' : 'slate'}`}><i />{resultLabel(item)}</span></div></header>
+    <div className="case-page-body">
     <div className="drawer-section"><p className="section-label">Residence to verify</p><p><strong>{item.customer.mobile}</strong></p><p>{[item.customer.address, item.customer.landmark, item.customer.city, item.customer.pincode].filter(Boolean).join(', ')}</p>{item.instructions && <p className="custody-agent-note"><strong>Instructions</strong>{item.instructions}</p>}</div>
 
     {canAssign && (item.status === 'open' || item.status === 'assigned') && <div className="drawer-section"><p className="section-label">{item.status === 'open' ? 'Assign an agent' : 'Reassign'}</p>
@@ -121,6 +131,7 @@ function VerificationDrawer({ item, agents, session, onClose, onChanged }: { ite
 
     {item.status === 'submitted' && canAssign && item.assignedAgentId && <div className="drawer-section"><p className="section-label">Rate the agent's work</p><div className="rate-row"><span>{item.assignedAgentName}</span><span className="star-input" role="radiogroup" aria-label={`Rate ${item.assignedAgentName}`}>{[1, 2, 3, 4, 5].map((value) => <button type="button" role="radio" aria-checked={item.agentStars === value} aria-label={`${value} star${value === 1 ? '' : 's'}`} key={value} disabled={busy} className={(item.agentStars ?? 0) >= value ? 'on' : ''} onClick={() => run(() => api.rateAgent(session.token, { jobType: 'verification', jobId: item.id, agentId: item.assignedAgentId as string, stars: value }))}><Star size={16} /></button>)}</span></div></div>}
 
+    </div>
     {error && <div className="app-error" role="alert">{error}</div>}
-  </aside></>;
+  </article>;
 }

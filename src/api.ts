@@ -1,4 +1,4 @@
-import type { Agent, AgentGroup, AgentRates, AgentRating, VerificationRequest, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
+import type { Agent, AgentGroup, AgentRates, AgentRating, OpenOffer, VerificationRequest, AppNotification, AuditEvent, CustodyRecord, EvidenceRecord, FinanceMember, RecoveryCase, ReleasePass } from './types';
 import { apiUrl } from './api-origin.ts';
 
 export type UserRole = 'super_admin' | 'finance_manager' | 'finance_staff' | 'agent' | 'platform_admin';
@@ -36,6 +36,7 @@ export interface Workspace {
   notifications: AppNotification[];
   releasePasses: ReleasePass[];
   verifications?: VerificationRequest[];
+  openOffers?: OpenOffer[];
 }
 
 export interface VerificationInput {
@@ -95,10 +96,12 @@ export interface BillingSummary {
 export interface PlatformSettings {
   vehicleRowPaise: number;
   verificationFeePaise: number;
+  apiKeyFeePaise: number;
   paymentInstructions: string;
 }
 
 export interface PlatformOverview {
+  keyRequests: KeyRequest[];
   topups: Topup[];
   tenants: Array<{ id: string; name: string; balancePaise: number; duePaise: number; lockedCount: number; chargedCount: number }>;
   settings: PlatformSettings;
@@ -112,6 +115,25 @@ export interface ApiKey {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+}
+
+export interface KeyRequest {
+  id: string;
+  tenantId: string;
+  tenantName?: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  feePaise?: number;
+  requestedBy?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface ApiKeyAllowance {
+  limit: number;
+  active: number;
+  extraKeyFeePaise: number;
+  latestRequest: KeyRequest | null;
 }
 
 export interface ImportError {
@@ -261,13 +283,18 @@ export const api = {
   },
   setAgentVisibility: (token: string, caseId: string, visibility: { customer: boolean; vehicle: boolean }) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/agent-visibility`, { method: 'PUT', body: JSON.stringify(visibility) }, token),
   rateAgent: (token: string, values: { jobType?: 'case' | 'verification'; caseId?: string; jobId?: string; agentId: string; stars: number; comment?: string }) => request<{ rating: { stars: number } }>('/api/ratings', { method: 'POST', body: JSON.stringify(values) }, token),
-  apiKeys: (token: string) => request<{ keys: ApiKey[] }>('/api/api-keys', {}, token),
+  apiKeys: (token: string) => request<{ keys: ApiKey[]; allowance: ApiKeyAllowance }>('/api/api-keys', {}, token),
+  requestApiKey: (token: string, reason: string) => request<{ request: KeyRequest }>('/api/api-keys/requests', { method: 'POST', body: JSON.stringify({ reason }) }, token),
+  decideApiKeyRequest: (token: string, requestId: string, decision: 'approve' | 'reject') => request<{ status: string }>(`/api/platform/api-key-requests/${requestId}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }, token),
+  offerCase: (token: string, caseId: string) => request<{ case: RecoveryCase; notified: number }>(`/api/cases/${caseId}/offer`, { method: 'POST' }, token),
+  withdrawOffer: (token: string, caseId: string) => request<{ case: RecoveryCase }>(`/api/cases/${caseId}/offer`, { method: 'DELETE' }, token),
+  acceptOffer: (token: string, caseId: string) => request<{ caseId: string }>(`/api/cases/${caseId}/accept-offer`, { method: 'POST' }, token),
   createApiKey: (token: string, name: string) => request<{ key: ApiKey & { key: string } }>('/api/api-keys', { method: 'POST', body: JSON.stringify({ name }) }, token),
   revokeApiKey: (token: string, keyId: string) => request<void>(`/api/api-keys/${keyId}`, { method: 'DELETE' }, token),
   requestTopup: (token: string, amountPaise: number, reference: string) => request<{ topup: Topup }>('/api/billing/topups', { method: 'POST', body: JSON.stringify({ amountPaise, reference }) }, token),
   platformOverview: (token: string) => request<PlatformOverview>('/api/platform/overview', {}, token),
   decideTopup: (token: string, topupId: string, decision: 'confirm' | 'reject') => request<{ settled: number }>(`/api/platform/topups/${topupId}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }, token),
-  updatePlatformSettings: (token: string, values: { vehicleRowRupees: number; verificationFeeRupees: number; paymentInstructions: string }) => request<{ settings: PlatformSettings }>('/api/platform/settings', { method: 'PUT', body: JSON.stringify(values) }, token),
+  updatePlatformSettings: (token: string, values: { vehicleRowRupees: number; verificationFeeRupees: number; apiKeyFeeRupees: number; paymentInstructions: string }) => request<{ settings: PlatformSettings }>('/api/platform/settings', { method: 'PUT', body: JSON.stringify(values) }, token),
   evidence: (token: string, caseId: string) => request<{ evidence: EvidenceRecord[] }>(`/api/cases/${caseId}/evidence`, {}, token),
   evidenceFile: async (token: string, evidenceId: string) => {
     const response = await fetch(apiUrl(`/api/evidence/${evidenceId}/file`, import.meta.env.VITE_API_ORIGIN), { headers: { Authorization: `Bearer ${token}` } });
