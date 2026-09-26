@@ -187,3 +187,4 @@
 .onboarding-actions .field-secondary{width:auto;margin-top:0;padding:0 18px;color:#40556f}
 .onboarding-signout{min-height:44px;margin-top:10px;border:0;background:transparent;color:#8a99ab;font-size:13px;font-weight:700}
 @media (prefers-reduced-motion:reduce){.field-toast,.onboarding-body{animation-duration:.01s}}
+.drawer-chat .chat{border:1px solid #e3e9f1;border-radius:10px;overflow:hidden;background:#f5f8fc}.drawer-chat .chat-messages{max-height:320px;min-height:120px}

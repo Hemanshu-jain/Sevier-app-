@@ -4,6 +4,7 @@ import { api } from './api';
 import type { Session } from './api';
 import type { AgentRates, AgentRating, RecoveryCase } from './types';
 import { errorMessage } from './BillingPage';
+import { ChatThread } from './FieldChat';
 
 // Statuses where the assigned agent has submitted a field outcome (the server re-checks from the audit trail).
 const RATEABLE = new Set(['unable_to_recover', 'custody_review', 'payment_pending', 'payment_confirmed', 'release_pass_printed', 'closed']);
@@ -21,7 +22,10 @@ export function rateText(rates: AgentRates | undefined, kind: keyof AgentRates) 
 function CaseAgentPanel({ caseItem, session, onChanged }: { caseItem: RecoveryCase; session: Session; onChanged: () => Promise<void> }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!session.user.permissions.includes('case.assign')) return null;
+  const chat = Boolean(caseItem.assignedAgents?.length) && <div className="drawer-section drawer-chat"><p className="section-label">Messages with the agent</p>
+    <ChatThread token={session.token} caseId={caseItem.id} userId={session.user.id} online={navigator.onLine} onError={setError} />
+  </div>;
+  if (!session.user.permissions.includes('case.assign')) return <>{chat}{error && <div className="app-error" role="alert">{error}</div>}</>;
   const visibility = caseItem.agentVisibility ?? { customer: true, vehicle: true };
 
   async function run(action: () => Promise<unknown>) {
@@ -33,6 +37,7 @@ function CaseAgentPanel({ caseItem, session, onChanged }: { caseItem: RecoveryCa
   const rate = (agentId: string, stars: number) => run(() => api.rateAgent(session.token, { caseId: caseItem.id, agentId, stars }));
 
   return <>
+    {chat}
     <div className="drawer-section"><p className="section-label">What the agent can see</p>
       <label className="check-line"><input type="checkbox" disabled={busy} checked={visibility.customer} onChange={(event) => setVisibility({ ...visibility, customer: event.target.checked })} /> Customer details (mobile, address, loan account and dues)</label>
       <label className="check-line"><input type="checkbox" disabled={busy} checked={visibility.vehicle} onChange={(event) => setVisibility({ ...visibility, vehicle: event.target.checked })} /> Vehicle details (make/model, chassis). The registration number is always shown.</label>
