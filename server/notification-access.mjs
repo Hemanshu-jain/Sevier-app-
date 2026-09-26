@@ -3,6 +3,7 @@ import { query } from './mysql.mjs';
 // notifications.case_id and the notification_reads table live in the migration.
 // Agents are global (may serve several financers), so their notices are matched by
 // recipient only — not tenant. Finance users stay tenant-scoped (broadcast + direct).
+// An agent's "Clear all" marks everything read, and read notices drop out of the agent's list.
 
 const COLUMNS = `notifications.id, notifications.tenant_id, notifications.recipient_user_id, notifications.case_id,
        notifications.title, notifications.detail, notifications.created_at, notifications.tone,
@@ -13,7 +14,7 @@ export async function listNotifications(executor, user) {
     return query(executor,
       `SELECT ${COLUMNS} FROM notifications
         LEFT JOIN notification_reads ON notification_reads.notification_id = notifications.id AND notification_reads.user_id = ?
-       WHERE notifications.recipient_user_id = ?
+       WHERE notifications.recipient_user_id = ? AND notification_reads.user_id IS NULL
        ORDER BY notifications.created_at DESC, notifications.id DESC LIMIT 50`,
       [user.id, user.id]);
   }

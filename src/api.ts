@@ -15,6 +15,37 @@ export interface SessionUser {
   city: string | null;
   onboardingComplete?: boolean;
   rates?: AgentRates;
+  profile?: AgentProfile;
+}
+
+export interface AgentProfile {
+  addressLine1: string;
+  addressLine2: string;
+  pincode: string;
+  idProofType: 'aadhaar' | 'pan' | null;
+  idProofLast4: string | null;
+  avatar: string | null;
+}
+
+export interface ProfileInput {
+  name: string;
+  city: string;
+  idProof?: string;
+  idProofType?: 'aadhaar' | 'pan';
+  addressLine1?: string;
+  addressLine2?: string;
+  pincode?: string;
+  rateVehicle?: string;
+  rateVerification?: string;
+}
+
+export interface CaseMessage {
+  id: string;
+  body: string;
+  createdAt: string;
+  senderId: string;
+  senderName: string;
+  fromAgent: boolean;
 }
 
 export interface Session {
@@ -217,7 +248,10 @@ export const api = {
   financeSignupVerify: (mobile: string, code: string, challengeId: string, company: { companyName: string; name: string; city: string }) => request<Session>('/api/finance/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId, ...company }) }),
   signupRequestOtp: (mobile: string) => request<OtpChallenge>('/api/agent/signup/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
   signupVerify: (mobile: string, code: string, challengeId: string) => request<Session>('/api/agent/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
-  updateProfile: (token: string, values: { name: string; city: string; idProof?: string; rateVehicle?: string; rateVerification?: string }) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),
+  updateProfile: (token: string, values: ProfileInput) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),
+  updateProfilePhoto: (token: string, photo: string) => request<{ user: SessionUser }>('/api/profile/photo', { method: 'PUT', body: JSON.stringify({ photo }) }, token),
+  caseMessages: (token: string, caseId: string) => request<{ messages: CaseMessage[] }>(`/api/cases/${caseId}/messages`, {}, token),
+  sendCaseMessage: (token: string, caseId: string, body: string) => request<{ message: CaseMessage }>(`/api/cases/${caseId}/messages`, { method: 'POST', body: JSON.stringify({ body }) }, token),
   logout: (token: string) => request<void>('/api/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<{ user: SessionUser }>('/api/me', {}, token),
   workspace: (token: string) => request<Workspace>('/api/workspace', {}, token),

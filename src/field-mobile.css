@@ -1,21 +1,8 @@
-.field-header button,.field-home-actions button,.field-icon-action{min-width:44px;min-height:44px}
+.field-header button{min-width:44px;min-height:44px}
 .field-primary,.field-secondary,.field-location,.field-quick-actions a{min-height:44px}
-.field-home-actions{display:flex;align-items:center;gap:2px}
-.field-home-actions button{position:relative;display:grid;place-items:center;border:0;background:transparent;color:#d9e7fa}
-.field-home-actions i{position:absolute;top:1px;right:0;min-width:17px;height:17px;padding:0 3px;border:2px solid #102c51;border-radius:9px;background:#ef6b61;color:#fff;font:8px/13px Manrope,Arial,sans-serif;text-align:center}
-.field-connection{display:flex;align-items:center;gap:6px;margin-top:13px;color:#47718e;font-size:9px;font-weight:800}
-.field-summary.three{grid-template-columns:repeat(3,1fr);gap:6px}
-.field-summary.three span{padding:9px 7px}
-.field-summary span.attention{border-color:#e9bb7c;background:#fff8ed;color:#955a13}
 .field-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:10px;padding:3px;border-radius:8px;background:#e8eef5}
 .field-tabs button{min-height:44px;border:0;border-radius:6px;background:transparent;color:#697d95;font-size:10px;font-weight:800}
 .field-tabs button.active{background:#fff;color:#225fbf;box-shadow:0 1px 4px rgba(24,48,80,.12)}
-.field-screen-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.field-screen-title h1{margin-bottom:0}
-.field-text-action{min-height:44px;border:0;background:transparent;color:#2868cf;font-size:9px;font-weight:800}
-.field-text-action:disabled{color:#99a8b9}
-.field-icon-action{display:grid;place-items:center;border:1px solid #d5e1ef;border-radius:8px;background:#fff;color:#2868cf}
-.field-icon-action:disabled{color:#a1adba}
 .field-list{display:grid;gap:8px;margin-top:14px}
 .field-list-row{width:100%;display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #e0e7ef;border-radius:8px;background:#fff;color:#49627e;text-align:left}
 .field-list-row.unread{border-left:4px solid #2c6ed7}
@@ -42,29 +29,15 @@
 .field-confirm input{width:20px;height:20px}
 .field-app button:focus-visible,.field-app a:focus-visible,.field-app input:focus-visible,.field-app textarea:focus-visible,.field-app select:focus-visible{outline:3px solid #87b4ff;outline-offset:2px}
 .custody-agent-note{display:grid;gap:3px;margin:10px 0 0;padding:9px;border:1px solid #d9e5f3;border-radius:6px;background:#f7faff;color:#5e7085;font-size:9px;line-height:1.5}.custody-agent-note strong{color:#355578;font-size:9px}
-@media (max-width:370px){.field-home,.field-case{padding-left:12px;padding-right:12px}.field-summary.three{grid-template-columns:1fr 1fr}.field-summary.three span:last-child{grid-column:1/-1}.field-checklist-select label{grid-template-columns:1fr}.field-quick-actions{grid-template-columns:1fr}}
+@media (max-width:370px){.field-home,.field-case{padding-left:12px;padding-right:12px}.field-checklist-select label{grid-template-columns:1fr}.field-quick-actions{grid-template-columns:1fr}}
 
 /* ---- polish pass: tap feedback (appended) ---- */
 .field-primary,.field-secondary,.field-assignment,.field-list-row,.field-tabs button,.field-file-picker,.field-location{transition:transform .1s ease,background-color .15s ease,box-shadow .15s ease,border-color .15s ease}
-.field-avatar{display:grid;place-items:center;width:46px;height:46px;border-radius:50%;background:#e5eefb;color:#245ab0;flex:none}
-.field-settings-form{display:grid;gap:12px;margin-top:14px}
-.field-settings-form input:disabled{background:#eef2f7;color:#8496a8}
-.field-idproof-label{display:inline-flex;align-items:center;gap:6px}
-.field-form-error{margin:0;color:#c0413d;font-size:11px;font-weight:700}
-.field-signout{margin-top:16px;color:#c0413d;border-color:#f0cecb}
-.field-signout:hover{background:#fff4f3}
 /* M5/M2: larger, more accessible field typography and controls for the final field build.
    Field text was 8-11px (too small on a phone); this raises the readable floor by ~+4
    and enlarges primary controls/touch targets. Sizes are px overrides layered over the base. */
 .field-home h1{font-size:26px}
-.field-greeting{font-size:13px}
-.field-copy{font-size:14px;line-height:1.55}
-.field-connection{font-size:12px}
-.field-summary.three span{font-size:12px}
-.field-summary strong{font-size:22px}
 .field-tabs button{font-size:13px}
-.field-screen-title h1{font-size:24px}
-.field-text-action{font-size:12px}
 .field-assignment p{font-size:12px}
 .field-assignment h2{font-size:17px}
 .field-assignment small{font-size:12px}
@@ -107,9 +80,110 @@
 .field-primary,.field-secondary{font-size:14px;min-height:50px}
 .field-complete-card strong{font-size:13px}
 .field-complete-card p{font-size:11px}
-.field-settings-form input:disabled{font-size:15px}
-.field-notice,.field-offline{font-size:11px}
-.field-footer-note{font-size:11px}
 
 /* Open-case offers in the agent app */
 .offer-row{align-items:center}.offer-row .field-primary{width:auto;min-height:40px;padding:0 16px}.offer-confirm{display:flex;gap:6px;flex:none}.offer-confirm .field-secondary{width:auto;min-height:40px;padding:0 12px}
+
+/* ---- Agent app shell: light top bar, bottom nav, toast, greeting, network strip ---- */
+.field-app.has-nav{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+.field-topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;padding:calc(10px + env(safe-area-inset-top)) 10px 6px 16px;background:rgba(245,248,252,.92);backdrop-filter:blur(10px)}
+.field-topbar img{height:30px}
+.field-topbar button{position:relative;display:grid;place-items:center;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#20395a;transition:background-color .15s ease}
+.field-topbar button:active{background:#e3ebf5}
+.field-topbar i{position:absolute;top:5px;right:4px;min-width:18px;height:18px;padding:0 4px;border:2px solid #f5f8fc;border-radius:9px;background:#e5484d;color:#fff;font:800 9px/14px Manrope,Arial,sans-serif;font-style:normal;text-align:center}
+.field-home{padding-top:6px}
+.field-title-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.field-title-row h1{margin:0}
+.field-kpis{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px}
+.field-kpis span{padding:4px 9px;border-radius:999px;background:#e9eff6;color:#5d7089;font-size:11px;font-weight:800;white-space:nowrap}
+.field-kpis span.on{background:#dce8fb;color:#2462c4}
+.field-kpis span.warn{background:#fff1dd;color:#a35f0c}
+.field-home>.field-list:first-of-type{margin-top:0}
+.assignment-cards{margin-top:14px}
+.field-nav{position:fixed;left:0;right:0;bottom:0;z-index:30;max-width:480px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid #e3e9f1;box-shadow:0 -6px 20px rgba(16,44,81,.06)}
+.field-nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:54px;border:0;border-radius:12px;background:transparent;color:#8494a8;font-size:11px;font-weight:800;transition:color .15s ease,background-color .15s ease,transform .1s ease}
+.field-nav button.active{color:#1f5fcc;background:#edf3fd}
+.field-nav button:active{transform:scale(.95)}
+.field-nav .profile-avatar{border:2px solid transparent}
+.field-nav button.active .profile-avatar{border-color:#1f5fcc}
+.field-header-text{min-width:auto!important;padding:0 6px!important;color:#d9e7fa!important;font-size:12px;font-weight:800}
+.field-header-text:disabled{opacity:.4}
+.field-header-spacer{width:44px}
+.offer-row.highlight{border-color:#2c6ed7;box-shadow:0 0 0 3px rgba(44,110,215,.16)}
+
+.field-toast{position:fixed;top:calc(14px + env(safe-area-inset-top));left:50%;z-index:80;transform:translateX(-50%);display:flex;align-items:center;gap:8px;width:max-content;max-width:calc(100% - 32px);padding:11px 16px;border-radius:12px;background:#1f2d40;color:#fff;font-size:13px;font-weight:700;line-height:1.4;box-shadow:0 10px 30px rgba(9,28,51,.25);animation:field-toast-in .22s ease-out}
+.field-toast.ok{background:#15935f}
+.field-toast svg{flex:none}
+@keyframes field-toast-in{from{opacity:0;transform:translate(-50%,-10px)}}
+.field-greeting-pop{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:24px;background:rgba(245,248,252,.88);backdrop-filter:blur(6px);color:#142941;font-size:24px;font-weight:800;letter-spacing:-.6px;text-align:center;pointer-events:none;animation:field-greet 1.8s ease forwards}
+@keyframes field-greet{0%{opacity:0}12%{opacity:1}78%{opacity:1}100%{opacity:0}}
+/* Network: a thin glow on the bottom edge, red while offline, green for a moment when it comes back. */
+.field-net{position:fixed;left:0;right:0;bottom:0;z-index:40;height:3px;pointer-events:none;opacity:0;transition:opacity .8s ease}
+.field-net.offline,.field-net.back{opacity:1}
+.field-net.offline{background:linear-gradient(90deg,transparent,#e5484d 25%,#e5484d 75%,transparent);box-shadow:0 -3px 12px rgba(229,72,77,.3)}
+.field-net.back{background:linear-gradient(90deg,transparent,#21a66b 25%,#21a66b 75%,transparent);box-shadow:0 -3px 12px rgba(33,166,107,.3)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---- Chat ---- */
+.chat-screen{display:flex;flex-direction:column;height:100dvh}
+.chat{flex:1;display:flex;flex-direction:column;min-height:0}
+.chat-messages{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:14px 12px}
+.chat-bubble{align-self:flex-start;max-width:80%;padding:8px 11px;border:1px solid #e3e9f1;border-radius:14px 14px 14px 4px;background:#fff;color:#1c3350}
+.chat-bubble.mine{align-self:flex-end;border-color:#2467d8;border-radius:14px 14px 4px 14px;background:#2467d8;color:#fff}
+.chat-bubble small{display:block;margin-bottom:2px;color:#5d7089;font-size:11px;font-weight:800}
+.chat-bubble p{margin:0;font-size:14px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat-bubble time{display:block;margin-top:3px;font-size:10px;opacity:.7;text-align:right}
+.chat-compose{display:flex;gap:8px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));border-top:1px solid #e3e9f1;background:#fff}
+.chat-compose input{flex:1;min-width:0;min-height:44px;padding:0 16px;border:1px solid #d8e1eb;border-radius:22px;font:15px Manrope,Arial,sans-serif}
+.chat-compose button{display:grid;place-items:center;flex:none;width:44px;height:44px;border:0;border-radius:50%;background:#2467d8;color:#fff}
+.chat-compose button:disabled{background:#b5c2d1}
+
+/* ---- Profile tab ---- */
+.profile-hero{display:flex;align-items:center;gap:16px;margin:4px 0 18px}
+.profile-hero h1{margin:0;font-size:22px}
+.profile-hero p{margin:3px 0 0;color:#6d7f94;font:13px DM Mono,monospace}
+.profile-avatar{display:grid;place-items:center;flex:none;overflow:hidden;border-radius:50%;background:#e5eefb;color:#245ab0}
+.profile-avatar img{width:100%;height:100%;object-fit:cover}
+.profile-photo{display:grid;justify-items:center;gap:6px}
+.profile-photo-button{position:relative;display:block;cursor:pointer}
+.profile-photo-button input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.profile-photo-badge{position:absolute;right:0;bottom:0;display:grid;place-items:center;width:28px;height:28px;border:2px solid #f5f8fc;border-radius:50%;background:#2467d8;color:#fff}
+.profile-sections{display:grid;gap:10px}
+.profile-section{overflow:hidden;border:1px solid #e0e7ef;border-radius:12px;background:#fff}
+.profile-section summary{display:flex;align-items:center;gap:12px;min-height:64px;padding:12px 14px;color:#2467d8;list-style:none;cursor:pointer}
+.profile-section summary::-webkit-details-marker{display:none}
+.profile-section summary>span{flex:1;min-width:0}
+.profile-section summary strong{display:block;color:#1c3350;font-size:15px}
+.profile-section summary small{display:block;margin-top:2px;overflow:hidden;color:#7a8ba0;font-size:12px;white-space:nowrap;text-overflow:ellipsis}
+.profile-section summary>svg:last-child{color:#9aa8b8;transition:transform .2s ease}
+.profile-section[open] summary{border-bottom:1px solid #eef2f6}
+.profile-section[open] summary>svg:last-child{transform:rotate(180deg)}
+.profile-section-body{padding:2px 14px 14px}
+.profile-section-body .field-primary{margin-top:6px}
+.profile-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.profile-hint{margin:-4px 0 10px;color:#7a8ba0;font-size:12px}
+.profile-hint.warn{color:#b3423d}
+.profile-segment{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:12px;padding:3px;border-radius:10px;background:#e8eef5}
+.profile-segment label{position:relative;display:grid;place-items:center;min-height:44px;border-radius:8px;color:#697d95;font-size:13px;font-weight:800;cursor:pointer}
+.profile-segment label.active{background:#fff;color:#2462c4;box-shadow:0 1px 4px rgba(24,48,80,.12)}
+.profile-segment input{position:absolute;opacity:0;pointer-events:none}
+.profile-segment label:has(input:focus-visible){outline:3px solid #87b4ff}
+.field-form-error{margin:0;color:#c0413d;font-size:12px;font-weight:700}
+.field-signout{margin-top:18px;color:#c0413d;border-color:#f0cecb}
+
+/* ---- First-run walkthrough ---- */
+.field-app.onboarding{display:flex;flex-direction:column;padding:calc(18px + env(safe-area-inset-top)) 20px 16px}
+.onboarding-progress{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.onboarding-progress span{height:4px;border-radius:2px;background:#dde5ef;transition:background-color .3s ease}
+.onboarding-progress span.done{background:#2467d8}
+.onboarding-body{flex:1;display:flex;flex-direction:column;margin-top:26px;animation:field-step-in .25s ease-out}
+@keyframes field-step-in{from{opacity:0;transform:translateX(14px)}}
+.onboarding-step{margin:0;color:#6a7d93;font-size:12px;font-weight:800;letter-spacing:.6px;text-transform:uppercase}
+.onboarding-icon{display:grid;place-items:center;width:46px;height:46px;margin-top:14px;border-radius:14px;background:#e5eefb;color:#2467d8}
+.onboarding-body h1{margin:14px 0 4px;color:#142941;font-size:26px;letter-spacing:-.8px}
+.onboarding-copy{margin:0 0 6px;color:#6d7f94;font-size:14px;line-height:1.5}
+.onboarding-body .profile-photo{margin:22px 0 4px}
+.onboarding-actions{display:flex;gap:10px;margin-top:auto;padding-top:24px}
+.onboarding-actions .field-secondary{width:auto;margin-top:0;padding:0 18px;color:#40556f}
+.onboarding-signout{min-height:44px;margin-top:10px;border:0;background:transparent;color:#8a99ab;font-size:13px;font-weight:700}
+@media (prefers-reduced-motion:reduce){.field-toast,.onboarding-body{animation-duration:.01s}}

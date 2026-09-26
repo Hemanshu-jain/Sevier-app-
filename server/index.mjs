@@ -19,6 +19,7 @@ import { normalizeImportRows, parseImportFile } from './import-parser.mjs';
 import { importMonthlyRows } from './monthly-import.mjs';
 import { agentRates, createAgent, listAgentCases, notSuspendedBy, setAgentActive, searchAgentDirectory, linkAgent } from './agent-management.mjs';
 import { rateAgent, ratingSummaries } from './agent-ratings.mjs';
+import { agentProfile, parseAgentProfile, validAvatar } from './agent-profile.mjs';
 import { VERIFICATION_PHOTOS, assignVerification, cancelVerification, createVerification, listVerifications, mapVerification, validateVerificationSubmission } from './verification.mjs';
 import { listGroups, createGroup, updateGroup, deleteGroup, broadcastToGroup } from './agent-groups.mjs';
 import { createAccount, normalizeAccountRows, updateAccount } from './account-management.mjs';
@@ -103,7 +104,7 @@ app.use(cors({ origin: true, credentials: false }));
 app.use(express.json({ limit: '2mb' }));
 
 function apiUser(row) {
-  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete), ...(row.role === 'agent' ? { rates: agentRates(row) } : {}) };
+  return { id: row.id, tenantId: row.tenant_id, role: row.role, permissions: permissionsForRole(row.role), name: row.name, email: row.email, mobile: row.mobile, city: row.city, tenantName: row.tenant_name ?? null, onboardingComplete: Boolean(row.onboarding_complete), ...(row.role === 'agent' ? { rates: agentRates(row), profile: agentProfile(row) } : {}) };
 }
 
 function mapCase(row, assignedAgents = []) {
@@ -297,13 +298,23 @@ app.put('/api/profile', auth, async (req, res) => {
   const city = String(req.body?.city || '').trim();
   if (name.length < 2 || name.length > 100) return res.status(422).json({ error: 'Enter your full name.' });
   if (city.length < 2 || city.length > 100) return res.status(422).json({ error: 'Enter your city.' });
-  const idProof = String(req.body?.idProof || '').trim();
-  // ID proof is required to finish onboarding; a later settings edit may omit it (the existing value is kept).
-  if (req.user.role === 'agent' && req.user.onboardingComplete === false && idProof.length < 4) return res.status(422).json({ error: 'Add a valid ID proof reference.' });
+  // Agents also keep an address and a typed ID proof; the ID is required until one is on file (blank = keep it).
+  const agentFields = req.user.role === 'agent' ? parseAgentProfile(req.body, { requireIdProof: !req.user.profile?.idProofLast4 }) : { values: {} };
+  if (agentFields.error) return res.status(422).json({ error: agentFields.error });
+  const extra = agentFields.values;
+  const idProof = extra.idProof ?? '';
   const rates = req.user.role === 'agent' ? [parseRate(req.body?.rateVehicle), parseRate(req.body?.rateVerification)] : [undefined, undefined];
   if (rates.some(Number.isNaN)) return res.status(422).json({ error: 'Rates must be between ₹0 and ₹1,00,000.' });
-  await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END, rate_vehicle_paise = CASE WHEN ? THEN ? ELSE rate_vehicle_paise END, rate_verification_paise = CASE WHEN ? THEN ? ELSE rate_verification_paise END WHERE id = ?",
-    [name, city, idProof, rates[0] !== undefined, rates[0] ?? null, rates[1] !== undefined, rates[1] ?? null, req.user.id]);
+  await query(pool, "UPDATE users SET name = ?, city = ?, id_proof = COALESCE(NULLIF(?, ''), id_proof), id_proof_type = COALESCE(?, id_proof_type), address_line1 = COALESCE(?, address_line1), address_line2 = COALESCE(?, address_line2), pincode = COALESCE(?, pincode), onboarding_complete = CASE WHEN role = 'agent' THEN 1 ELSE onboarding_complete END, rate_vehicle_paise = CASE WHEN ? THEN ? ELSE rate_vehicle_paise END, rate_verification_paise = CASE WHEN ? THEN ? ELSE rate_verification_paise END WHERE id = ?",
+    [name, city, idProof, extra.idProofType ?? null, extra.addressLine1 ?? null, extra.addressLine2 ?? null, extra.pincode ?? null, rates[0] !== undefined, rates[0] ?? null, rates[1] !== undefined, rates[1] ?? null, req.user.id]);
+  const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [req.user.id]);
+  return res.json({ user: apiUser(user) });
+});
+
+app.put('/api/profile/photo', auth, async (req, res) => {
+  if (req.user.role !== 'agent') return res.status(403).json({ error: 'Only field agents have a profile photo.' });
+  if (!validAvatar(req.body?.photo)) return res.status(422).json({ error: 'Choose a JPEG, PNG or WebP photo.' });
+  await query(pool, 'UPDATE users SET avatar = ? WHERE id = ?', [req.body.photo, req.user.id]);
   const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [req.user.id]);
   return res.json({ user: apiUser(user) });
 });
@@ -645,7 +656,7 @@ app.post('/api/cases/:id/offer', auth, requirePermission(PERMISSIONS.CASE_ASSIGN
   const offeredAt = isoNow();
   await tx(pool, async (conn) => {
     await query(conn, 'UPDATE recovery_cases SET open_offer_at = ?, open_offer_by_user_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?', [offeredAt, req.user.id, offeredAt, caseRow.id, req.user.tenantId]);
-    for (const agent of agents) await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: agent.id, title: 'Open case available', detail: `${caseRow.registration} (${caseRow.branch}) is open. The first agent to accept gets it.`, tone: 'blue' });
+    for (const agent of agents) await addNotification(conn, { tenantId: req.user.tenantId, recipientUserId: agent.id, caseId: caseRow.id, title: 'Open case available', detail: `${caseRow.registration} (${caseRow.branch}) is open. The first agent to accept gets it.`, tone: 'blue' });
     await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.offered', detail: `Offered to ${agents.length} active agent(s).` });
   });
   res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])), notified: agents.length });
@@ -1190,6 +1201,34 @@ app.post('/api/cases/:id/close', auth, requirePermission(PERMISSIONS.RELEASE_CLO
     await addAudit(conn, { tenantId: req.user.tenantId, caseId: caseRow.id, actorUserId: req.user.id, action: 'case.closed', detail: 'Finance user recorded final release and closure.' });
   });
   res.json({ case: mapCase(await queryOne(pool, 'SELECT * FROM recovery_cases WHERE id = ?', [caseRow.id])) });
+});
+
+// ---- Case chat: the assigned agent and the finance company that owns the case ----
+app.get('/api/cases/:id/messages', auth, async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const rows = await query(pool, `SELECT m.id, m.body, m.created_at, m.sender_user_id, u.name AS sender_name, u.role AS sender_role
+    FROM case_messages m JOIN users u ON u.id = m.sender_user_id WHERE m.case_id = ? ORDER BY m.created_at DESC, m.id DESC LIMIT 200`, [caseRow.id]);
+  res.json({ messages: rows.reverse().map((row) => ({ id: row.id, body: row.body, createdAt: row.created_at, senderId: row.sender_user_id, senderName: row.sender_name, fromAgent: row.sender_role === 'agent' })) });
+});
+
+app.post('/api/cases/:id/messages', auth, async (req, res) => {
+  const caseRow = await caseForUser(req.params.id, req.user);
+  if (!caseRow) return res.status(404).json({ error: 'Recovery case not found.' });
+  const body = String(req.body?.body ?? '').trim();
+  if (!body || body.length > 2000) return res.status(422).json({ error: 'Write a message of up to 2000 characters.' });
+  const message = { id: `msg-${crypto.randomUUID()}`, body, createdAt: isoNow(), senderId: req.user.id, senderName: req.user.name, fromAgent: req.user.role === 'agent' };
+  await tx(pool, async (conn) => {
+    await query(conn, 'INSERT INTO case_messages (id, tenant_id, case_id, sender_user_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)', [message.id, caseRow.tenant_id, caseRow.id, req.user.id, body, message.createdAt]);
+    // ponytail: one notification per message; batch/unread-count per thread if chats get busy.
+    const preview = body.length > 80 ? `${body.slice(0, 80)}…` : body;
+    if (message.fromAgent) await addNotification(conn, { tenantId: caseRow.tenant_id, caseId: caseRow.id, title: `Message from ${req.user.name}`, detail: `${caseRow.id}: ${preview}`, tone: 'blue' });
+    else {
+      const agents = await query(conn, 'SELECT agent_user_id FROM case_assignments WHERE case_id = ? AND active = 1', [caseRow.id]);
+      for (const agent of agents) await addNotification(conn, { tenantId: caseRow.tenant_id, recipientUserId: agent.agent_user_id, caseId: caseRow.id, title: 'New message from finance', detail: `${caseRow.id}: ${preview}`, tone: 'blue' });
+    }
+  });
+  res.status(201).json({ message });
 });
 
 app.post('/api/notifications/read-all', auth, async (req, res) => {

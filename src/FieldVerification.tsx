@@ -14,12 +14,11 @@ type Props = {
   queued: boolean;
   onNotice: (message: string) => void;
   onQueued: (mutation: StoredFieldMutation) => void;
-  onOpenSync: () => void;
 };
 
 // Agent flow for a house verification: go to the address, capture GPS, take 2-4 photos, record the result.
 // Saved on the device first and sent by the same offline queue as vehicle evidence.
-function FieldVerification({ request, userId, online, queued, onNotice, onQueued, onOpenSync }: Props) {
+function FieldVerification({ request, userId, online, queued, onNotice, onQueued }: Props) {
   const [location, setLocation] = useState<FieldLocation | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
   const [result, setResult] = useState<'verified' | 'not_verified' | ''>('');
@@ -62,7 +61,7 @@ function FieldVerification({ request, userId, online, queued, onNotice, onQueued
     {request.finance && <section className="field-info-card"><p className="field-label">Finance company</p><div className="field-person"><strong>{request.finance.company}</strong><span>{request.finance.contactName ?? 'Finance team'}{request.finance.contactMobile ? ` · ${request.finance.contactMobile}` : ''}</span></div>{request.finance.contactMobile && <div className="field-quick-actions"><a href={`tel:${request.finance.contactMobile.replaceAll(' ', '')}`}><Phone size={15} /> Call financer</a></div>}</section>}
     <section className="field-info-card"><p className="field-label">Customer residence</p><div className="field-person"><strong>{request.customer.name}</strong><span>{request.customer.mobile}</span></div><p className="field-address"><MapPinned size={15} /> {fullAddress}</p><div className="field-quick-actions"><a href={`tel:${request.customer.mobile.replaceAll(' ', '')}`}><Phone size={15} /> Call customer</a><a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`} target="_blank" rel="noreferrer"><MapPinned size={15} /> Open address</a></div></section>
     {request.instructions && <section className="field-instruction"><ShieldAlert size={16} /><div><strong>Finance instruction</strong><p>{request.instructions}</p></div></section>}
-    {done ? <section className="field-complete-card"><FileCheck2 size={24} /><div><strong>{request.status === 'submitted' ? `Submitted · ${request.result === 'verified' ? 'location verified' : 'location not verified'}` : 'Verification saved on this device'}</strong><p>{request.status === 'submitted' ? request.resultNote : 'Open Pending sync to check delivery. Do not submit again.'}</p></div>{queued && request.status !== 'submitted' && <button className="field-secondary" onClick={onOpenSync}>Open pending sync</button>}</section> : <section className="field-step-card">
+    {done ? <section className="field-complete-card"><FileCheck2 size={24} /><div><strong>{request.status === 'submitted' ? `Submitted · ${request.result === 'verified' ? 'location verified' : 'location not verified'}` : 'Verification saved on this device'}</strong><p>{request.status === 'submitted' ? request.resultNote : 'It sends automatically as soon as the phone is online. Do not submit again.'}</p></div></section> : <section className="field-step-card">
       <p className="field-label">Verify at the address</p>
       <button className="field-location" onClick={capture} disabled={working}><Crosshair size={18} /><span>{location ? `Location captured · ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}` : 'Capture GPS at the customer address'}</span></button>
       <label className="field-file-picker"><Camera size={22} /><strong>Take 2 to 4 photos</strong><span>House front, name plate or door number, surroundings</span><input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple onChange={(event) => setPhotos((current) => [...current, ...Array.from(event.target.files ?? [])].slice(0, 4))} /></label>

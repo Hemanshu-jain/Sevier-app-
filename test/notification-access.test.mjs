@@ -60,3 +60,17 @@ test('reading a shared finance notification is per user', { skip }, async () => 
     await pool.end();
   }
 });
+
+test('an agent clearing notifications removes them from the agent list only', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const { tenantId, agent1, manager1, ids } = await seed(pool);
+    const agent = { id: agent1, tenantId, role: 'agent' };
+    await markNotificationsRead(pool, agent, '2026-09-01T13:00:00Z');
+    assert.deepEqual(await listNotifications(pool, agent), []);
+    const financeRows = await listNotifications(pool, { id: manager1, tenantId, role: 'finance_manager' });
+    assert.ok(financeRows.some((row) => row.id === ids.broadcast));
+  } finally {
+    await pool.end();
+  }
+});

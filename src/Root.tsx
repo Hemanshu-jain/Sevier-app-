@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { ArrowLeft, ArrowRight, Building2, Check, KeyRound, LoaderCircle, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowRight, Building2, KeyRound, LoaderCircle, ShieldCheck, UserRound } from 'lucide-react';
 import App from './App';
 import FieldApp from './FieldApp';
+import { AgentOnboarding } from './FieldProfile';
 import PlatformApp from './PlatformApp';
 import { api, clearSession, saveSession, storedSession } from './api';
-import type { Session, SessionUser } from './api';
+import type { Session } from './api';
 import { loginDefaults } from './runtime-mode';
 import { shouldClearStoredSession } from './session-restoration';
 
@@ -35,7 +36,7 @@ function Root() {
   if (checking) return <div className="auth-shell"><div className="auth-card loading"><LoaderCircle className="spin" size={24} /> Restoring your secure workspace…</div></div>;
   if (!session) return <LoginPage onSession={apply} />;
   if (session.user.role === 'agent' && session.user.onboardingComplete === false) {
-    return <OnboardingWizard session={session} onDone={(user) => apply({ ...session, user })} onLogout={logout} />;
+    return <AgentOnboarding session={session} onDone={(user) => apply({ ...session, user })} onLogout={logout} />;
   }
   if (session.user.role === 'platform_admin') return <PlatformApp session={session} onLogout={logout} />;
   const onSessionUpdate = (user: Session['user']) => apply({ ...session, user });
@@ -118,49 +119,6 @@ function LoginPage({ onSession }: { onSession: (session: Session) => void }) {
     {defaults.showDemoAccounts && mode === 'signin' && <div className="demo-logins"><p>Local demo accounts</p><button type="button" onClick={() => { setMobile('+91 98450 11111'); reset('signin'); }}>Finance super-admin</button><button type="button" onClick={() => { setMobile('+91 98451 22014'); reset('signin'); }}>Android field agent</button></div>}
     {!Capacitor.isNativePlatform() && <a className="text-button auth-download" href="/download/handoff-field.apk" download>Field agent? Download the Android app</a>}
     <div className="auth-protection"><ShieldCheck size={15} /> OTP login and revocable sessions enabled</div>
-  </section></main>;
-}
-
-function OnboardingWizard({ session, onDone, onLogout }: { session: Session; onDone: (user: SessionUser) => void; onLogout: () => void }) {
-  const [step, setStep] = useState(0);
-  const [name, setName] = useState(session.user.name === 'New agent' ? '' : session.user.name);
-  const [city, setCity] = useState(session.user.city ?? '');
-  const [idProof, setIdProof] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const steps = [
-    { key: 'name', label: 'What is your name?', valid: name.trim().length >= 2 },
-    { key: 'city', label: 'Which city do you work in?', valid: city.trim().length >= 2 },
-    { key: 'id', label: 'Add an ID proof', valid: idProof.trim().length >= 4 },
-    { key: 'review', label: 'Confirm your details', valid: true },
-  ];
-  const current = steps[step];
-
-  async function finish() {
-    setBusy(true); setError('');
-    try {
-      const { user } = await api.updateProfile(session.token, { name: name.trim(), city: city.trim(), idProof: idProof.trim() });
-      onDone(user);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save your profile.'); setBusy(false); }
-  }
-
-  return <main className="auth-shell"><section className="auth-card">
-    <div className="auth-brand"><img className="auth-logo" src="/handoff-logo.png" alt="Handoff" /></div>
-    <div className="auth-intro"><p className="eyebrow">Complete your profile · step {step + 1} of {steps.length}</p><h1>{current.label}</h1><p>Finish setup to start receiving assigned work orders.</p></div>
-    <div className="onboard-progress">{steps.map((item, index) => <span key={item.key} className={index <= step ? 'done' : ''} />)}</div>
-    {step === 0 && <label className="field-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Ravi Kumar" /></label>}
-    {step === 1 && <label className="field-label">Primary city<input value={city} onChange={(event) => setCity(event.target.value)} autoFocus placeholder="e.g. Bengaluru" /></label>}
-    {step === 2 && <label className="field-label">ID proof reference<input value={idProof} onChange={(event) => setIdProof(event.target.value)} autoFocus placeholder="Aadhaar / driving licence number" /></label>}
-    {step === 3 && <dl className="onboard-review"><div><dt>Name</dt><dd>{name}</dd></div><div><dt>City</dt><dd>{city}</dd></div><div><dt>ID proof</dt><dd>{idProof}</dd></div><div><dt>Mobile</dt><dd>{session.user.mobile}</dd></div></dl>}
-    {error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="onboard-actions">
-      {step > 0 && <button className="secondary-button" type="button" onClick={() => setStep(step - 1)} disabled={busy}><ArrowLeft size={15} /> Back</button>}
-      {step < steps.length - 1
-        ? <button className="primary-button" type="button" disabled={!current.valid} onClick={() => setStep(step + 1)}>Continue <ArrowRight size={15} /></button>
-        : <button className="primary-button" type="button" disabled={busy} onClick={finish}>{busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} Finish setup</button>}
-    </div>
-    <button className="text-button" type="button" onClick={onLogout}>Sign out</button>
   </section></main>;
 }
 

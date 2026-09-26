@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { ReactNode } from 'react';
 import {
-  ArrowLeft, Bell, Camera, CarFront, Check, ChevronRight, CircleAlert, ClipboardCheck, Cloud,
-  Crosshair, FileCheck2, IdCard, ListChecks, LogOut, MapPinned, Phone, RefreshCw, Save, Settings, ShieldAlert,
-  Upload, UserRound, Wifi, WifiOff, X,
+  ArrowLeft, Bell, Camera, CarFront, Check, CheckCheck, ChevronRight, CircleAlert, ClipboardCheck, Cloud,
+  Crosshair, FileCheck2, LogOut, MapPinned, MessageSquare, Phone, Save, ShieldAlert,
+  Upload, UserRound, X,
 } from 'lucide-react';
 import { api } from './api';
 import type { Session, Workspace } from './api';
@@ -19,13 +19,17 @@ import { caseStatusLabel } from './types';
 import { readDeviceLocation } from './device-location';
 import type { FieldLocation } from './device-location';
 import FieldVerification from './FieldVerification';
+import { FieldProfile, Avatar } from './FieldProfile';
+import { ChatList, ChatThread } from './FieldChat';
 
 const reasonOptions: AttemptReason[] = ['Vehicle not found', 'Vehicle details mismatch', 'Unsafe situation', 'Customer dispute', 'Authority issue', 'Other'];
 const agentChecklist = ['Battery', 'Spare tyre', 'Fuel level', 'Matting', 'Keys and key number', 'Meter / odometer', 'Existing damages', 'Self motor', 'Wiper / motor', 'Stereo / infotainment', 'Ignition coil', 'Speakers', 'Side mirrors', 'Tyre condition'];
 const inspectionOptions = ['', 'Present / working', 'Missing', 'Damaged', 'Not applicable'];
 const emptyWorkspace: Workspace = { cases: [], custody: [], agents: [], groups: [], notifications: [], releasePasses: [], verifications: [], openOffers: [] };
 
-type FieldView = 'home' | 'notifications' | 'sync' | 'settings';
+type FieldView = 'submitted' | 'active' | 'messages' | 'profile' | 'notifications';
+type Notice = { text: string; ok: boolean };
+const AUTO_SYNC_MS = 30_000;
 type FieldStep = 'work' | 'verify' | 'evidence' | 'custody';
 type FieldDraft = {
   registration: string;
@@ -67,8 +71,8 @@ function mutationLabel(operation: StoredFieldMutation['operation']) {
 function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequestSignOut }: { session: Session; onLogout: () => void; onSessionUpdate: (user: Session['user']) => void; onRequestSignOut: () => void }) {
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [mutations, setMutations] = useState<StoredFieldMutation[]>([]);
-  const [view, setView] = useState<FieldView>('home');
-  const [filter, setFilter] = useState<'active' | 'submitted'>('active');
+  const [view, setView] = useState<FieldView>('active');
+  const [chatCaseId, setChatCaseId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedVerificationId, setSelectedVerificationId] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
@@ -80,12 +84,16 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
   const [showAttempt, setShowAttempt] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<Notice | null>(null);
   const [online, setOnline] = useState(navigator.onLine);
+  const [netFlash, setNetFlash] = useState<'offline' | 'back' | null>(navigator.onLine ? null : 'offline');
+  const [greeting, setGreeting] = useState<string | null>(null);
   const syncingRef = useRef(false);
   const assignments = workspace.cases;
   const selected = assignments.find((item) => item.id === selectedId) ?? null;
+
+  // Success messages are green and short-lived; everything else stays a little longer.
+  function setNotice(text: string | null, ok = false) { setNoticeState(text ? { text, ok } : null); }
 
   async function onLogout() {
     try { await deleteFieldWorkspace(session.user.id); }
@@ -117,7 +125,6 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
   async function syncQueue() {
     if (syncingRef.current || !navigator.onLine) return;
     syncingRef.current = true;
-    setSyncing(true);
     let queue = await reloadMutations();
     let synchronized = false;
     try {
@@ -164,6 +171,7 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
           await saveFieldMutation(failed);
           queue = queue.map((item) => item.id === current.id ? failed : item);
           setMutations(queue);
+          if (failed.status === 'needs_attention') setNotice(`${mutationLabel(current.operation)} for ${current.caseId} was not accepted: ${failed.error}`);
           if (classification === 'authentication') { await onLogout(); break; }
           if (classification === 'offline' || classification === 'retryable') break;
         }
@@ -171,12 +179,14 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
       if (synchronized) await refreshWorkspace();
     } finally {
       syncingRef.current = false;
-      setSyncing(false);
     }
   }
 
   useEffect(() => {
     void (async () => {
+      // Opening the app retries anything the server rejected earlier; there is no manual sync screen.
+      const stored = await listFieldMutations(session.user.id).catch(() => []);
+      await Promise.all(stored.filter((item) => item.status === 'needs_attention').map((item) => saveFieldMutation({ ...item, status: 'pending', error: undefined })));
       await reloadMutations().catch((error) => setNotice(errorMessage(error, 'Saved field work could not be opened.')));
       await refreshWorkspace();
       setLoading(false);
@@ -185,15 +195,44 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
   }, []);
 
   useEffect(() => {
+    let flashTimer = 0;
     const updateStatus = () => {
       const connected = navigator.onLine;
       setOnline(connected);
-      if (connected) void syncQueue();
+      window.clearTimeout(flashTimer);
+      setNetFlash(connected ? 'back' : 'offline');
+      if (connected) { flashTimer = window.setTimeout(() => setNetFlash(null), 2500); void syncQueue(); }
     };
+    // Background loop: send queued work, then quietly pull new cases and notifications.
+    const autoSync = window.setInterval(() => {
+      if (!navigator.onLine) return;
+      void syncQueue().then(() => api.workspace(session.token)).then((next) => { setWorkspace(next); return saveFieldWorkspace(session.user.id, next); }).catch(() => undefined);
+    }, AUTO_SYNC_MS);
     window.addEventListener('online', updateStatus);
     window.addEventListener('offline', updateStatus);
-    return () => { window.removeEventListener('online', updateStatus); window.removeEventListener('offline', updateStatus); };
+    return () => { window.removeEventListener('online', updateStatus); window.removeEventListener('offline', updateStatus); window.clearInterval(autoSync); window.clearTimeout(flashTimer); };
   }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNoticeState(null), notice.ok ? 2200 : 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  // Greeting pops up on the first open of the day only.
+  useEffect(() => {
+    const key = `handoff-greeted:${session.user.id}`;
+    const today = new Date().toDateString();
+    try { if (localStorage.getItem(key) === today) return; localStorage.setItem(key, today); } catch { return; }
+    const hour = new Date().getHours();
+    setGreeting(`${hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}, ${session.user.name.split(' ')[0]}`);
+  }, [session.user.id, session.user.name]);
+
+  useEffect(() => {
+    if (!greeting) return;
+    const timer = window.setTimeout(() => setGreeting(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [greeting]);
 
   useEffect(() => {
     if (!selectedId) { setDraftReady(false); return; }
@@ -224,7 +263,6 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
 
   const unreadCount = workspace.notifications.filter((item) => !item.read).length;
   const needsAttention = mutations.filter((item) => item.status === 'needs_attention').length;
-  const visibleAssignments = filterAgentCases(assignments, filter);
   const inspectionComplete = useMemo(() => agentChecklist.every((item) => Boolean(draft.inspection[item])), [draft.inspection]);
   const vehicleMatches = selected && normalise(draft.registration) === normalise(selected.vehicle.registration) && normalise(draft.chassisLastSix) === normalise(selected.vehicle.chassis.slice(-6));
   const selectedMutations = mutations.filter((item) => item.caseId === selectedId);
@@ -315,18 +353,11 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
     } catch (error) { setNotice(errorMessage(error, 'Custody certificate could not be saved.')); } finally { setWorking(false); }
   }
 
-  async function retryQueue() {
-    const reset = mutations.map((item) => item.status === 'needs_attention' ? { ...item, status: 'pending' as const, error: undefined } : item);
-    await Promise.all(reset.map(saveFieldMutation));
-    setMutations(reset);
-    await syncQueue();
-  }
-
-  async function markNotificationsRead() {
-    if (!online) { setNotice('Reconnect before marking notifications as read.'); return; }
+  async function clearNotifications() {
+    if (!online) { setNotice('Reconnect before clearing notifications.'); return; }
     try {
       await api.readNotifications(session.token);
-      const next = { ...workspace, notifications: workspace.notifications.map((item) => ({ ...item, read: true })) };
+      const next = { ...workspace, notifications: [] };
       setWorkspace(next);
       await saveFieldWorkspace(session.user.id, next);
     } catch (error) { setNotice(errorMessage(error, 'Notifications could not be updated.')); }
@@ -341,7 +372,7 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
     setWorking(true);
     try {
       await api.acceptOffer(session.token, caseId);
-      setNotice('Case accepted. It is now in your assignments.');
+      setNotice('Case accepted', true);
     } catch (error) {
       setNotice(errorMessage(error, 'The case could not be accepted.'));
     } finally {
@@ -349,24 +380,42 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
       await refreshWorkspace();
     }
   }
+  // Every notification goes somewhere: an assigned case opens, an open offer jumps to its Accept button.
+  function openNotification(item: Workspace['notifications'][number]) {
+    // Older offer notices carry no case id, so fall back to the registration in the text.
+    const assigned = assignments.find((entry) => entry.id === item.caseId || (!item.caseId && item.detail.includes(entry.vehicle.registration)));
+    if (assigned && item.title.startsWith('New message')) { setView('messages'); setChatCaseId(assigned.id); return; }
+    if (assigned) { setView('active'); setSelectedId(assigned.id); return; }
+    const verification = verifications.find((entry) => entry.id === item.caseId);
+    if (verification) { setSelectedVerificationId(verification.id); return; }
+    const offer = openOffers.find((entry) => entry.id === item.caseId || item.detail.includes(entry.vehicle.registration));
+    setView('active');
+    if (offer) setAcceptingId(offer.id);
+    else if (item.title === 'Open case available') setNotice('This case is no longer open. Another agent may have accepted it.');
+  }
+
+  const overlays = <>
+    {notice && <div className={`field-toast ${notice.ok ? 'ok' : ''}`} role="status" onClick={() => setNotice(null)}>{notice.ok && <Check size={16} />}<span>{notice.text}</span></div>}
+    {greeting && <div className="field-greeting-pop" role="status">{greeting}</div>}
+    <div className={`field-net ${netFlash ?? ''}`} role="status">{netFlash === 'offline' ? <span className="sr-only">You are offline. Work stays on this phone.</span> : netFlash === 'back' ? <span className="sr-only">Back online.</span> : null}</div>
+  </>;
+
   const selectedVerification = verifications.find((item) => item.id === selectedVerificationId) ?? null;
   if (selectedVerification) {
-    return <main className="field-app"><FieldHeader title={selectedVerification.id} onBack={() => setSelectedVerificationId(null)} onLogout={onRequestSignOut} />
+    return <main className="field-app"><FieldHeader title={selectedVerification.id} onBack={() => setSelectedVerificationId(null)} />
       <section className="field-case">
-        <FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} />
         <FieldVerification request={selectedVerification} userId={session.user.id} online={online} queued={mutations.some((item) => item.caseId === selectedVerification.id)} onNotice={setNotice}
-          onQueued={(mutation) => { setMutations((current) => [...current, mutation]); if (online) void syncQueue(); }} onOpenSync={() => { setSelectedVerificationId(null); setView('sync'); }} />
-      </section>
+          onQueued={(mutation) => { setMutations((current) => [...current, mutation]); if (online) void syncQueue(); }} />
+      </section>{overlays}
     </main>;
   }
 
   if (selected) {
     const serverSubmitted = filterAgentCases([selected], 'submitted').length > 0;
     const readOnly = serverSubmitted || finalQueued;
-    return <main className="field-app"><FieldHeader title={selected.id} onBack={() => setSelectedId(null)} onLogout={onRequestSignOut} />
+    return <main className="field-app"><FieldHeader title={selected.id} onBack={() => setSelectedId(null)} action={<button onClick={() => { setSelectedId(null); setView('messages'); setChatCaseId(selected.id); }} aria-label="Message finance"><MessageSquare size={19} /></button>} />
       <section className="field-case">
-        <FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} />
-        <div className="field-status"><span>{readOnly ? finalQueued ? 'QUEUED FOR SYNC' : 'REPORT SUBMITTED' : 'FINANCE ASSIGNED'}</span><small>Updated {new Date(selected.updatedAt).toLocaleString()}</small></div>
+        <div className="field-status"><span>{readOnly ? finalQueued ? 'SENDING' : 'REPORT SUBMITTED' : 'FINANCE ASSIGNED'}</span><small>Updated {new Date(selected.updatedAt).toLocaleString()}</small></div>
         <div className="field-vehicle-head"><span>{selected.vehicle.type === '2-wheeler' ? '2W' : '4W'}</span><div><h1>{selected.vehicle.registration}</h1><p>{selected.agentVisibility?.vehicle === false ? 'Vehicle details hidden by financer' : selected.vehicle.makeModel}</p></div></div>
         {selected.finance && <section className="field-info-card"><p className="field-label">Finance company</p><div className="field-person"><strong>{selected.finance.company}</strong><span>{selected.finance.contactName ?? 'Finance team'}{selected.finance.contactMobile ? ` · ${selected.finance.contactMobile}` : ''}</span></div>{selected.finance.contactMobile && <div className="field-quick-actions"><a href={`tel:${selected.finance.contactMobile.replaceAll(' ', '')}`}><Phone size={15} /> Call financer</a></div>}</section>}
         {selected.agentVisibility?.customer === false
@@ -374,7 +423,7 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
           : <section className="field-info-card"><p className="field-label">Customer and loan information</p><div className="field-person"><strong>{selected.borrower.name}</strong><span>{selected.borrower.mobile}</span></div><p className="field-address"><MapPinned size={15} /> {selected.borrower.address}</p><div className="field-loan-grid"><span><small>Account</small><strong>{selected.accountNumber}</strong></span><span><small>Pending amount</small><strong>₹{selected.pendingAmount.toLocaleString('en-IN')}</strong></span><span><small>Overdue</small><strong>{selected.overdueDays} days</strong></span><span><small>Chassis no.</small><strong>{selected.agentVisibility?.vehicle === false ? 'Hidden' : selected.vehicle.chassis.slice(-8)}</strong></span></div><div className="field-quick-actions"><a href={`tel:${selected.borrower.mobile.replaceAll(' ', '')}`}><Phone size={15} /> Call customer</a><a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selected.borrower.address)}`} target="_blank" rel="noreferrer"><MapPinned size={15} /> Open address</a></div></section>}
         {selected.assignmentNote && <section className="field-instruction"><ShieldAlert size={16} /><div><strong>Finance instruction</strong><p>{selected.assignmentNote}</p></div></section>}
         <section className={`field-authority ${authorityApproved ? 'approved' : 'missing'}`}><ShieldAlert size={17} /><div><strong>{authorityApproved ? 'Recovery authority approved' : 'Recovery authority unavailable'}</strong><p>{selected.authority ? `${selected.authority.documentName} · ${new Date(selected.authority.approvedAt).toLocaleString()}` : 'Stop and contact the finance manager. Verification cannot begin without approved authority.'}</p></div></section>
-        {readOnly ? <section className="field-complete-card"><FileCheck2 size={24} /><div><strong>{finalQueued ? 'Field report saved on this device' : 'Field report already submitted'}</strong><p>{finalQueued ? 'Open Pending sync to check delivery. Do not create a duplicate report.' : `Finance status: ${caseStatusLabel(selected.status)}. No further field action is available.`}</p></div>{finalQueued && <button className="field-secondary" onClick={() => { setSelectedId(null); setView('sync'); }}>Open pending sync</button>}</section> : <>
+        {readOnly ? <section className="field-complete-card"><FileCheck2 size={24} /><div><strong>{finalQueued ? 'Field report saved on this device' : 'Field report already submitted'}</strong><p>{finalQueued ? 'It sends automatically as soon as the phone is online. Do not create a duplicate report.' : `Finance status: ${caseStatusLabel(selected.status)}. No further field action is available.`}</p></div></section> : <>
           <FieldSteps step={step} verified={draft.verified} evidenceReady={evidenceReady} onChange={setStep} />
           {step === 'work' && <section className="field-step-card"><div className="field-guardrail"><ShieldAlert size={19} /><div><strong>Stop conditions</strong><p>Do not use force or proceed when vehicle details differ, authority is invalid, or the situation is unsafe.</p></div></div><button className="field-primary" disabled={!authorityApproved} onClick={() => setStep('verify')}><ClipboardCheck size={18} /> Start verification</button><button className="field-secondary" onClick={() => setShowAttempt(true)}><CircleAlert size={17} /> Unable to recover</button></section>}
           {step === 'verify' && <section className="field-step-card"><StepHeading eyebrow="STEP 1 OF 3" title="Verify the vehicle" copy="Match the vehicle to the finance work order before taking custody." /><label className="field-text-label">Registration number<input autoCapitalize="characters" value={draft.registration} onChange={(event) => updateDraft({ registration: event.target.value, verified: false })} placeholder="Enter vehicle number" /></label><label className="field-text-label">Last 6 characters of chassis number<input autoCapitalize="characters" value={draft.chassisLastSix} onChange={(event) => updateDraft({ chassisLastSix: event.target.value, verified: false })} placeholder="Enter last 6 characters" /></label><div className={`field-match ${vehicleMatches ? 'confirmed' : ''}`} role="status"><Check size={17} /><span>{vehicleMatches ? 'Vehicle details match the work order.' : 'Enter both values exactly as shown on the vehicle.'}</span></div><button className="field-location" onClick={captureLocation} disabled={working}><Crosshair size={18} /><span>{draft.location ? `Location captured · ${draft.location.latitude.toFixed(5)}, ${draft.location.longitude.toFixed(5)}` : 'Capture current GPS location'}</span></button><button className="field-primary" disabled={!vehicleMatches || !draft.location} onClick={() => { updateDraft({ verified: true }); setStep('evidence'); }}><Check size={18} /> Confirm and continue</button></section>}
@@ -388,67 +437,56 @@ function FieldScreens({ session, onLogout: finishLogout, onSessionUpdate, onRequ
           </section>}
           {step === 'custody' && <section className="field-step-card"><StepHeading eyebrow="STEP 3 OF 3" title="Digital parking check slip" copy="Record the vehicle condition and handover. Every condition needs a selection." /><div className="field-checklist-select">{agentChecklist.map((item) => <label key={item}><span>{item}</span><select value={draft.inspection[item] ?? ''} onChange={(event) => updateDraft({ inspection: { ...draft.inspection, [item]: event.target.value } })}>{inspectionOptions.map((option) => <option key={option} value={option}>{option || 'Select condition'}</option>)}</select></label>)}</div><label className="field-text-label">Parking location<input value={draft.yardName} onChange={(event) => updateDraft({ yardName: event.target.value })} placeholder="Enter yard or parking location" /></label><label className="field-text-label">Vehicle arrival time<input type="datetime-local" value={draft.arrivalTime} onChange={(event) => updateDraft({ arrivalTime: event.target.value })} /></label><label className="field-text-label">Daily parking rate (₹)<input type="number" min="0" inputMode="numeric" value={draft.parkingRate} onChange={(event) => updateDraft({ parkingRate: event.target.value })} placeholder="e.g. 350" /></label><label className="field-text-label">Custom note (optional)<textarea maxLength={2000} value={draft.customNote} onChange={(event) => updateDraft({ customNote: event.target.value })} placeholder="Visible damage, handover notes, or other factual details…" /></label><label className="field-confirm"><input type="checkbox" checked={draft.handoverConfirmed} onChange={(event) => updateDraft({ handoverConfirmed: event.target.checked })} /><span>I confirm this inspection reflects the vehicle at handover.</span></label><button className="field-primary" disabled={!canFinishCustody || working} onClick={queueCustody}><Check size={18} /> {working ? 'Saving custody…' : online ? 'Save and submit custody' : 'Save custody for later'}</button><p className="field-draft-note"><Save size={14} /> Draft and queued work stay on this phone until synchronization succeeds.</p></section>}
         </>}
-      </section>{showAttempt && <FailedAttemptDialog onClose={() => setShowAttempt(false)} onSave={queueAttempt} busy={working} />}
+      </section>{overlays}{showAttempt && <FailedAttemptDialog onClose={() => setShowAttempt(false)} onSave={queueAttempt} busy={working} />}
     </main>;
   }
 
-  if (view === 'settings') return <main className="field-app"><FieldHeader title="SETTINGS" onBack={() => setView('home')} onLogout={onRequestSignOut} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><FieldSettings session={session} online={online} pending={mutations.length} onSaved={onSessionUpdate} onNotice={setNotice} onLogout={onRequestSignOut} /></section></main>;
+  if (view === 'notifications') return <main className="field-app"><FieldHeader title="NOTIFICATIONS" onBack={() => setView('active')} action={<button className="field-header-text" disabled={!workspace.notifications.length} onClick={clearNotifications}>Clear all</button>} />
+    <section className="field-home">
+      <section className="field-list">{workspace.notifications.length ? workspace.notifications.map((item) => <button key={item.id} className={`field-list-row ${item.read ? '' : 'unread'}`} onClick={() => openNotification(item)}><Bell size={18} /><span><strong>{item.title}</strong><small>{item.detail}</small><em>{new Date(item.createdAt).toLocaleString()}</em></span><ChevronRight size={17} /></button>) : <p className="field-empty">You're all caught up.</p>}</section>
+    </section>{overlays}
+  </main>;
 
-  if (view === 'notifications') return <main className="field-app"><FieldHeader title="NOTIFICATIONS" onBack={() => setView('home')} onLogout={onRequestSignOut} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><div className="field-screen-title"><div><p className="field-greeting">Finance updates</p><h1>Notifications</h1></div><button className="field-text-action" disabled={!unreadCount} onClick={markNotificationsRead}>Mark all read</button></div><section className="field-list">{workspace.notifications.length ? workspace.notifications.map((item) => <button key={item.id} className={`field-list-row ${item.read ? '' : 'unread'}`} onClick={() => { if (item.caseId && assignments.some((entry) => entry.id === item.caseId)) setSelectedId(item.caseId); }}><Bell size={18} /><span><strong>{item.title}</strong><small>{item.detail}</small><em>{new Date(item.createdAt).toLocaleString()}</em></span>{item.caseId && <ChevronRight size={17} />}</button>) : <p className="field-empty">No notifications for this agent.</p>}</section></section></main>;
+  const chatCase = chatCaseId ? assignments.find((item) => item.id === chatCaseId) : undefined;
+  if (view === 'messages' && chatCase) return <main className="field-app chat-screen"><FieldHeader title={chatCase.finance?.company ?? chatCase.id} onBack={() => setChatCaseId(null)} />
+    <ChatThread token={session.token} caseId={chatCase.id} userId={session.user.id} online={online} onError={setNotice} />{overlays}
+  </main>;
 
-  if (view === 'sync') return <main className="field-app"><FieldHeader title="PENDING SYNC" onBack={() => setView('home')} onLogout={onRequestSignOut} /><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><div className="field-screen-title"><div><p className="field-greeting">Device queue</p><h1>Pending sync</h1></div><button className="field-icon-action" aria-label="Retry synchronization" disabled={!online || syncing || !mutations.length} onClick={retryQueue}><RefreshCw className={syncing ? 'spin' : ''} size={18} /></button></div><p className="field-copy">Operations remain here until the finance server confirms them. There is no destructive discard action.</p><section className="field-list">{mutations.length ? mutations.map((item) => <article key={item.id} className="field-list-row"><ListChecks size={18} /><span><strong>{mutationLabel(item.operation)}</strong><small>{item.caseId} · {item.status === 'needs_attention' ? 'Needs attention' : item.status === 'syncing' ? 'Sending now' : online ? 'Waiting to send' : 'Waiting for connection'}</small><em>{new Date(item.createdAt).toLocaleString()} · {item.attemptCount ?? 0} attempt(s)</em>{item.error && <b role="alert">{item.error}</b>}</span></article>) : <p className="field-empty">Everything from this device has synchronized.</p>}</section></section></main>;
+  const tab = view as Exclude<FieldView, 'notifications'>;
+  const activeCases = filterAgentCases(assignments, 'active');
+  const submittedCases = filterAgentCases(assignments, 'submitted');
+  const activeVerifications = verifications.filter((item) => item.status !== 'submitted');
+  const doneVerifications = verifications.filter((item) => item.status === 'submitted');
+  const titles = { active: 'Active', submitted: 'Submitted', messages: 'Messages', profile: 'Profile' };
+  const verificationRow = (item: typeof verifications[number]) => <button key={item.id} className="field-list-row" onClick={() => setSelectedVerificationId(item.id)}><MapPinned size={18} /><span><strong>{item.customer.name} · {item.customer.city}</strong><small>{item.reference} · {item.finance?.company ?? 'Finance company'}</small><em>{item.status === 'submitted' ? (item.result === 'verified' ? 'Submitted · verified' : 'Submitted · not verified') : mutations.some((mutation) => mutation.caseId === item.id) ? 'Saved on phone · sending' : 'To visit'}</em></span><ChevronRight size={17} /></button>;
+  const caseCards = (items: RecoveryCase[], submitted: boolean) => items.map((item) => <AssignmentCard key={item.id} item={item} submitted={submitted} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />);
 
-  return <main className="field-app"><header className="field-header home"><div className="field-brand"><img src="/handoff-logo-white.png" alt="Handoff" /></div><nav className="field-home-actions" aria-label="Agent tools"><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={19} />{unreadCount > 0 && <i>{unreadCount > 9 ? '9+' : unreadCount}</i>}</button><button onClick={() => setView('sync')} aria-label={`${mutations.length} pending sync operations`}><Cloud size={19} />{mutations.length > 0 && <i>{mutations.length}</i>}</button><button onClick={() => setView('settings')} aria-label="Settings and profile"><Settings size={19} /></button></nav></header><section className="field-home"><FieldMessages notice={notice} online={online} onDismiss={() => setNotice(null)} /><p className="field-greeting">Good day, {session.user.name.split(' ')[0]}</p><h1>Your assignments</h1><p className="field-copy">Only work orders assigned to you are shown here.</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? syncing ? 'Online · synchronizing' : 'Online' : 'Offline · work will stay on this device'}</div>{loading ? <p className="field-copy">Loading secure assignments…</p> : <><div className="field-summary three"><span><strong>{filterAgentCases(assignments, 'active').length}</strong>active</span><span><strong>{filterAgentCases(assignments, 'submitted').length}</strong>submitted</span><span className={needsAttention ? 'attention' : ''}><strong>{needsAttention}</strong>needs attention</span></div>{openOffers.length > 0 && <section className="field-list verification-jobs"><p className="field-label">Open cases · first agent to accept gets it</p>{openOffers.map((offer) => <article key={offer.id} className="field-list-row offer-row"><CarFront size={18} /><span><strong>{offer.vehicle.registration}{offer.vehicle.makeModel ? ` · ${offer.vehicle.makeModel}` : ''}</strong><small>{offer.financeCompany} · {offer.branch}</small><em>Offered {new Date(offer.offeredAt).toLocaleString()}</em></span>{acceptingId === offer.id ? <span className="offer-confirm"><button className="field-primary" disabled={working} onClick={() => acceptOffer(offer.id)}>Confirm</button><button className="field-secondary" onClick={() => setAcceptingId(null)}>Cancel</button></span> : <button className="field-primary" disabled={working} onClick={() => setAcceptingId(offer.id)}>Accept</button>}</article>)}</section>}{verifications.length > 0 && <section className="field-list verification-jobs"><p className="field-label">House verifications</p>{verifications.map((item) => <button key={item.id} className="field-list-row" onClick={() => setSelectedVerificationId(item.id)}><MapPinned size={18} /><span><strong>{item.customer.name} · {item.customer.city}</strong><small>{item.reference} · {item.finance?.company ?? 'Finance company'}</small><em>{item.status === 'submitted' ? (item.result === 'verified' ? 'Submitted · verified' : 'Submitted · not verified') : mutations.some((mutation) => mutation.caseId === item.id) ? 'Saved on device · waiting to sync' : 'To visit'}</em></span><ChevronRight size={17} /></button>)}</section>}<div className="field-tabs" role="tablist" aria-label="Assignment status"><button role="tab" aria-selected={filter === 'active'} className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>Active</button><button role="tab" aria-selected={filter === 'submitted'} className={filter === 'submitted' ? 'active' : ''} onClick={() => setFilter('submitted')}>Submitted</button></div><section className="assignment-cards">{visibleAssignments.length ? visibleAssignments.map((item) => <AssignmentCard key={item.id} item={item} submitted={filter === 'submitted'} queued={mutations.some((mutation) => mutation.caseId === item.id)} onOpen={() => setSelectedId(item.id)} />) : <p className="field-empty">No {filter} work orders.</p>}</section></>}<div className="field-footer-note"><ShieldAlert size={16} /> Every update is time-stamped, tenant-scoped, and sent only to the finance company.</div></section></main>;
+  return <main className="field-app has-nav">
+    <header className="field-topbar"><img src="/handoff-logo.png" alt="Handoff" /><button onClick={() => setView('notifications')} aria-label={`${unreadCount} unread notifications`}><Bell size={21} />{unreadCount > 0 && <i>{unreadCount > 9 ? '9+' : unreadCount}</i>}</button></header>
+    <section className="field-home">
+      {tab !== 'profile' && <div className="field-title-row"><h1>{titles[tab]}</h1>{tab !== 'messages' && <div className="field-kpis"><span className={tab === 'active' ? 'on' : ''}>{activeCases.length + activeVerifications.length} active</span><span className={tab === 'submitted' ? 'on' : ''}>{submittedCases.length + doneVerifications.length} done</span>{needsAttention > 0 && <span className="warn">{needsAttention} stuck</span>}</div>}</div>}
+      {loading && tab !== 'profile' ? <p className="field-empty">Loading your work…</p> : <>
+        {tab === 'active' && <>
+          {openOffers.length > 0 && <section className="field-list"><p className="field-label">Open cases · first agent to accept gets it</p>{openOffers.map((offer) => <article key={offer.id} className={`field-list-row offer-row ${acceptingId === offer.id ? 'highlight' : ''}`}><CarFront size={18} /><span><strong>{offer.vehicle.registration}{offer.vehicle.makeModel ? ` · ${offer.vehicle.makeModel}` : ''}</strong><small>{offer.financeCompany} · {offer.branch}</small><em>Offered {new Date(offer.offeredAt).toLocaleString()}</em></span>{acceptingId === offer.id ? <span className="offer-confirm"><button className="field-primary" disabled={working} onClick={() => acceptOffer(offer.id)}>Confirm</button><button className="field-secondary" onClick={() => setAcceptingId(null)}>Cancel</button></span> : <button className="field-primary" disabled={working} onClick={() => setAcceptingId(offer.id)}>Accept</button>}</article>)}</section>}
+          {activeVerifications.length > 0 && <section className="field-list"><p className="field-label">House verifications</p>{activeVerifications.map(verificationRow)}</section>}
+          <section className="assignment-cards">{activeCases.length ? caseCards(activeCases, false) : !openOffers.length && !activeVerifications.length && <p className="field-empty">No active work right now.</p>}</section>
+        </>}
+        {tab === 'submitted' && <>
+          {doneVerifications.length > 0 && <section className="field-list"><p className="field-label">House verifications</p>{doneVerifications.map(verificationRow)}</section>}
+          <section className="assignment-cards">{submittedCases.length ? caseCards(submittedCases, true) : !doneVerifications.length && <p className="field-empty">Nothing submitted yet.</p>}</section>
+        </>}
+        {tab === 'messages' && <ChatList cases={assignments} onOpen={setChatCaseId} />}
+      </>}
+      {tab === 'profile' && <FieldProfile session={session} onSaved={onSessionUpdate} onNotice={setNotice} onLogout={onRequestSignOut} />}
+    </section>
+    <nav className="field-nav" aria-label="Sections">
+      {([['submitted', CheckCheck, 'Submitted'], ['active', CarFront, 'Active'], ['messages', MessageSquare, 'Messages'], ['profile', UserRound, 'Profile']] as const).map(([id, Icon, label]) => <button key={id} className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined} onClick={() => { setView(id); setChatCaseId(null); }}>{id === 'profile' && session.user.profile?.avatar ? <Avatar src={session.user.profile.avatar} size={24} /> : <Icon size={21} />}<span>{label}</span></button>)}
+    </nav>{overlays}
+  </main>;
 }
 
-function FieldHeader({ title, onBack, onLogout }: { title: string; onBack: () => void; onLogout: () => void }) {
-  return <header className="field-header"><button onClick={onBack} aria-label="Go back"><ArrowLeft size={20} /></button><div><span>FIELD AGENT</span><strong>{title}</strong></div><button onClick={onLogout} aria-label="Sign out"><LogOut size={19} /></button></header>;
-}
-
-function FieldSettings({ session, online, pending, onSaved, onNotice, onLogout }: { session: Session; online: boolean; pending: number; onSaved: (user: Session['user']) => void; onNotice: (message: string) => void; onLogout: () => void }) {
-  const [name, setName] = useState(session.user.name);
-  const [city, setCity] = useState(session.user.city ?? '');
-  const [idProof, setIdProof] = useState('');
-  const savedVehicleRate = session.user.rates?.vehicle?.toString() ?? '';
-  const savedVerificationRate = session.user.rates?.verification?.toString() ?? '';
-  const [rateVehicle, setRateVehicle] = useState(savedVehicleRate);
-  const [rateVerification, setRateVerification] = useState(savedVerificationRate);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const dirty = name.trim() !== session.user.name || city.trim() !== (session.user.city ?? '') || idProof.trim().length > 0 || rateVehicle.trim() !== savedVehicleRate || rateVerification.trim() !== savedVerificationRate;
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true); setError('');
-    try {
-      const { user } = await api.updateProfile(session.token, { name: name.trim(), city: city.trim(), idProof: idProof.trim() || undefined, rateVehicle: rateVehicle.trim(), rateVerification: rateVerification.trim() });
-      setIdProof('');
-      onSaved(user);
-      onNotice('Your profile was saved.');
-    } catch (err) { setError(errorMessage(err, 'Your profile could not be saved.')); }
-    finally { setSaving(false); }
-  }
-
-  return <>
-    <div className="field-screen-title"><div><p className="field-greeting">Signed in as</p><h1>{session.user.name}</h1></div><span className="field-avatar"><UserRound size={22} /></span></div>
-    <form className="field-settings-form" onSubmit={submit}>
-      <label className="field-text-label">Full name<input value={name} onChange={(event) => setName(event.target.value)} required minLength={2} maxLength={100} /></label>
-      <label className="field-text-label">City<input value={city} onChange={(event) => setCity(event.target.value)} required minLength={2} maxLength={100} /></label>
-      <label className="field-text-label">Mobile<input value={session.user.mobile ?? ''} readOnly disabled /></label>
-      <label className="field-text-label"><span className="field-idproof-label"><IdCard size={15} /> Update ID proof reference</span><input value={idProof} onChange={(event) => setIdProof(event.target.value)} placeholder="Leave blank to keep your current ID proof" minLength={4} maxLength={100} /></label>
-      <p className="field-label">My rates · shown to financers when they choose an agent</p>
-      <label className="field-text-label">Vehicle seizure (₹ per job)<input value={rateVehicle} onChange={(event) => setRateVehicle(event.target.value)} type="number" inputMode="numeric" min={0} max={100000} step={1} placeholder="Not set" /></label>
-      <label className="field-text-label">House verification (₹ per job)<input value={rateVerification} onChange={(event) => setRateVerification(event.target.value)} type="number" inputMode="numeric" min={0} max={100000} step={1} placeholder="Not set" /></label>
-      {error && <p className="field-form-error" role="alert">{error}</p>}
-      <button className="field-primary" type="submit" disabled={!dirty || saving}><Check size={18} /> {saving ? 'Saving…' : 'Save profile'}</button>
-    </form>
-    <section className="field-info-card"><p className="field-label">Connection and sync</p><div className="field-connection" role="status">{online ? <Wifi size={15} /> : <WifiOff size={15} />} {online ? 'Online' : 'Offline · work stays on this device'}</div><p className="field-copy">{pending > 0 ? `${pending} update${pending === 1 ? '' : 's'} waiting to sync from this device.` : 'Everything from this device has synced.'}</p></section>
-    <button className="field-secondary field-signout" type="button" onClick={onLogout}><LogOut size={17} /> Sign out</button>
-  </>;
-}
-
-function FieldMessages({ notice, online, onDismiss }: { notice: string | null; online: boolean; onDismiss: () => void }) {
-  return <>{notice && <div className="field-notice" role="status"><span>{notice}</span><button onClick={onDismiss} aria-label="Dismiss message"><X size={15} /></button></div>}{!online && <div className="field-offline" role="status"><WifiOff size={16} /> Offline — drafts and queued updates remain on this device.</div>}</>;
+function FieldHeader({ title, onBack, action }: { title: string; onBack: () => void; action?: ReactNode }) {
+  return <header className="field-header"><button onClick={onBack} aria-label="Go back"><ArrowLeft size={20} /></button><div><span>FIELD AGENT</span><strong>{title}</strong></div>{action ?? <span className="field-header-spacer" />}</header>;
 }
 
 function AssignmentCard({ item, submitted, queued, onOpen }: { item: RecoveryCase; submitted: boolean; queued: boolean; onOpen: () => void }) {
