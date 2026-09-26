@@ -281,6 +281,17 @@ app.post('/api/agent/signup/verify', otpLimiter, async (req, res) => {
   }
 });
 
+app.post('/api/finance/signup/verify', otpLimiter, async (req, res) => {
+  try {
+    const result = await verifySignUpOtp({ database: pool, otpProvider, challengeId: String(req.body?.challengeId || ''), mobile: String(req.body?.mobile || ''), code: String(req.body?.code || ''), finance: { companyName: req.body?.companyName, name: req.body?.name, city: req.body?.city } });
+    const user = await queryOne(pool, 'SELECT users.*, tenants.name AS tenant_name FROM users LEFT JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?', [result.userId]);
+    return res.status(201).json({ token: result.token, user: apiUser(user) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Sign-up verification failed.';
+    return res.status(error.status ?? (/unavailable/i.test(message) ? 503 : 401)).json({ error: message });
+  }
+});
+
 app.put('/api/profile', auth, async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const city = String(req.body?.city || '').trim();

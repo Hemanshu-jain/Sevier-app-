@@ -63,7 +63,20 @@ export async function requestSignUpOtp({ database, otpProvider, mobile, requestI
   return { challengeId, expiresAt, ...(providerResult.developmentCode ? { developmentCode: providerResult.developmentCode } : {}) };
 }
 
-export async function verifySignUpOtp({ database, otpProvider, challengeId, mobile, code, now = new Date() }) {
+// A finance company signing itself up: its owner becomes the company's super admin.
+export function validateFinanceSignup(values = {}) {
+  const clean = (value) => String(value ?? '').trim().replace(/\s+/g, ' ');
+  const finance = { companyName: clean(values.companyName), name: clean(values.name), city: clean(values.city) };
+  const invalid = (message) => Object.assign(new Error(message), { status: 422 });
+  if (finance.companyName.length < 2 || finance.companyName.length > 255) throw invalid('Enter your finance company name.');
+  if (finance.name.length < 2 || finance.name.length > 100) throw invalid('Enter your full name.');
+  if (finance.city.length < 2 || finance.city.length > 100) throw invalid('Enter your city.');
+  return finance;
+}
+
+// Creates a self-registered agent, or (with `finance`) a new finance company plus its super admin.
+export async function verifySignUpOtp({ database, otpProvider, challengeId, mobile, code, finance: financeValues = null, now = new Date() }) {
+  const finance = financeValues ? validateFinanceSignup(financeValues) : null;
   const mobileE164 = normalizeIndiaMobile(mobile);
   const challenge = await queryOne(database, "SELECT * FROM otp_challenges WHERE id = ? AND mobile_e164 = ? AND purpose = 'sign_up'", [challengeId, mobileE164]);
   if (!challenge) throw new Error('The sign-up request is invalid.');
@@ -71,18 +84,29 @@ export async function verifySignUpOtp({ database, otpProvider, challengeId, mobi
   if (new Date(challenge.expires_at) <= now) throw new Error('This OTP has expired.');
 
   await otpProvider.verify(mobileE164, code);
-  const userId = `agent-${randomUUID()}`;
+  const userId = finance ? `user-${randomUUID()}` : `agent-${randomUUID()}`;
+  const tenantId = finance ? `tenant-${randomUUID()}` : null;
   const sessionId = randomUUID();
   const { token, hash } = createSessionToken();
   const expiresAt = new Date(now.getTime() + 8 * 60 * 60_000).toISOString();
   const displayMobile = `+91 ${mobileE164.slice(2, 7)} ${mobileE164.slice(7)}`;
   await tx(database, async (conn) => {
     await query(conn, 'UPDATE otp_challenges SET verified_at = ? WHERE id = ?', [now.toISOString(), challenge.id]);
-    await query(conn,
-      `INSERT INTO users (id, tenant_id, role, name, email, password_hash, mobile, city, active, mobile_e164, onboarding_complete, created_via)
-       VALUES (?, NULL, 'agent', 'New agent', ?, 'otp-only', ?, '', 1, ?, 0, 'self')`,
-      [userId, `${userId}@handoff.invalid`, displayMobile, mobileE164]);
+    if (finance) {
+      await query(conn, 'INSERT INTO tenants (id, name) VALUES (?, ?)', [tenantId, finance.companyName]);
+      await query(conn,
+        `INSERT INTO users (id, tenant_id, role, name, email, password_hash, mobile, city, active, mobile_e164, onboarding_complete, created_via)
+         VALUES (?, ?, 'super_admin', ?, ?, 'otp-only', ?, ?, 1, ?, 1, 'self')`,
+        [userId, tenantId, finance.name, `${userId}@handoff.invalid`, displayMobile, finance.city, mobileE164]);
+      await query(conn, 'INSERT INTO audit_events (tenant_id, case_id, actor_user_id, action, detail, created_at) VALUES (?, NULL, ?, ?, ?, ?)',
+        [tenantId, userId, 'tenant.created', `${finance.companyName} was registered by ${finance.name}.`, now.toISOString()]);
+    } else {
+      await query(conn,
+        `INSERT INTO users (id, tenant_id, role, name, email, password_hash, mobile, city, active, mobile_e164, onboarding_complete, created_via)
+         VALUES (?, NULL, 'agent', 'New agent', ?, 'otp-only', ?, '', 1, ?, 0, 'self')`,
+        [userId, `${userId}@handoff.invalid`, displayMobile, mobileE164]);
+    }
     await query(conn, 'INSERT INTO auth_sessions (id, user_id, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)', [sessionId, userId, hash, now.toISOString(), expiresAt]);
   });
-  return { sessionId, token, expiresAt, userId };
+  return { sessionId, token, expiresAt, userId, tenantId };
 }

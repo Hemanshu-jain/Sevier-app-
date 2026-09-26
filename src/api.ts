@@ -214,6 +214,7 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
 export const api = {
   requestOtp: (mobile: string) => request<OtpChallenge>('/api/auth/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
   verifyOtp: (mobile: string, code: string, challengeId: string) => request<Session>('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
+  financeSignupVerify: (mobile: string, code: string, challengeId: string, company: { companyName: string; name: string; city: string }) => request<Session>('/api/finance/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId, ...company }) }),
   signupRequestOtp: (mobile: string) => request<OtpChallenge>('/api/agent/signup/request-otp', { method: 'POST', body: JSON.stringify({ mobile }) }),
   signupVerify: (mobile: string, code: string, challengeId: string) => request<Session>('/api/agent/signup/verify', { method: 'POST', body: JSON.stringify({ mobile, code, challengeId }) }),
   updateProfile: (token: string, values: { name: string; city: string; idProof?: string; rateVehicle?: string; rateVerification?: string }) => request<{ user: SessionUser }>('/api/profile', { method: 'PUT', body: JSON.stringify(values) }, token),

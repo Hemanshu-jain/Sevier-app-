@@ -86,6 +86,22 @@ test('self-signup creates a global agent needing onboarding, and rejects an exis
   }
 });
 
+test('a finance company can sign itself up; its owner is the super admin of a new company', { skip }, async () => {
+  const pool = await migratedPool();
+  try {
+    const mobile = randomMobile();
+    await assert.rejects(async () => verifySignUpOtp({ database: pool, otpProvider: provider, challengeId: 'x', mobile, code: '123456', finance: { companyName: 'A', name: 'Priya Shah', city: 'Pune' } }), /company name/);
+    const req = await requestSignUpOtp({ database: pool, otpProvider: provider, mobile });
+    const session = await verifySignUpOtp({ database: pool, otpProvider: provider, challengeId: req.challengeId, mobile, code: '123456', finance: { companyName: ' Shah  Capital ', name: 'Priya Shah', city: 'Pune' } });
+    const user = (await query(pool, 'SELECT tenant_id, role, name, city, onboarding_complete FROM users WHERE id = ?', [session.userId]))[0];
+    assert.deepEqual({ ...user, onboarding_complete: Number(user.onboarding_complete) }, { tenant_id: session.tenantId, role: 'super_admin', name: 'Priya Shah', city: 'Pune', onboarding_complete: 1 });
+    assert.equal((await query(pool, 'SELECT name FROM tenants WHERE id = ?', [session.tenantId]))[0].name, 'Shah Capital');
+    await assert.rejects(requestSignUpOtp({ database: pool, otpProvider: provider, mobile }), /already has an account/i);
+  } finally {
+    await pool.end();
+  }
+});
+
 test('expired OTP challenges cannot create sessions', { skip }, async () => {
   const pool = await migratedPool();
   try {
