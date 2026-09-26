@@ -8,6 +8,9 @@ test('mobile package is installable and uses the production web bundle', async (
   assert.deepEqual({ appId: config.appId, appName: config.appName, webDir: config.webDir }, {
     appId: 'in.handoff.recovery', appName: 'Handoff Field', webDir: 'dist',
   });
+  // Agents always run the latest deploy: the app shell loads the live site over HTTPS.
+  assert.equal(config.server.url, 'https://handoff.bhodhix.com');
+  assert.equal(statSync(join('public', config.server.errorPath)).size > 0, true);
 
   const manifest = JSON.parse(readFileSync('public/manifest.webmanifest', 'utf8'));
   assert.equal(manifest.display, 'standalone');
