@@ -12,7 +12,9 @@ while ($true) {
       -RedirectStandardOutput "$repo\server-run.log" -RedirectStandardError "$repo\server-run.err.log"
     Add-Content "$repo\keep-alive.log" "$(Get-Date -Format s) restarted API"
   }
-  if (-not (Get-Process cloudflared -ErrorAction SilentlyContinue)) {
+  # Only Handoff's own tunnel counts; the LMS app runs a cloudflared of its own on this PC.
+  $tunnel = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.CommandLine -like '*tunnel run handoff*' }
+  if (-not $tunnel) {
     Start-Process -WindowStyle Hidden -FilePath $cloudflared -ArgumentList 'tunnel', 'run', 'handoff'
     Add-Content "$repo\keep-alive.log" "$(Get-Date -Format s) restarted tunnel"
   }
