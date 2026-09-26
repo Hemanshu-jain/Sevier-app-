@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Handoff API — Documentation</title>
+<meta name="description" content="Push overdue loan accounts into Handoff from your own system." />
+<link rel="icon" type="image/png" href="/icons/handoff-48.png" />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{--navy:#102c51;--ink:#17283d;--muted:#5f7186;--line:#e3e9f0;--page:#f6f8fb;--blue:#276be7;--code:#0f1b2d;--green:#168260;--amber:#a35f0c;--red:#be4e4b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);font:15px/1.65 Manrope,Arial,sans-serif}
+  a{color:var(--blue)}
+  header.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;padding:12px 24px;background:#fff;border-bottom:1px solid var(--line)}
+  header.top img{height:30px}
+  header.top span{font-weight:700;color:var(--muted);font-size:13px;border-left:1px solid var(--line);padding-left:14px}
+  .wrap{display:grid;grid-template-columns:240px minmax(0,1fr);max-width:1180px;margin:0 auto}
+  nav.side{position:sticky;top:55px;align-self:start;height:calc(100vh - 55px);overflow:auto;padding:26px 16px 26px 24px;border-right:1px solid var(--line)}
+  nav.side p{margin:18px 0 6px;font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:#8a99ab}
+  nav.side a{display:block;padding:5px 10px;border-radius:6px;color:#3b5068;text-decoration:none;font-size:14px;font-weight:600}
+  nav.side a:hover{background:#eaf1ff;color:var(--navy)}
+  main{padding:34px 44px 80px;min-width:0}
+  h1{font-size:34px;letter-spacing:-1px;margin:0 0 8px}
+  h2{font-size:24px;letter-spacing:-.5px;margin:54px 0 10px;padding-top:12px;border-top:1px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 8px}
+  p.lead{font-size:17px;color:var(--muted);max-width:70ch}
+  .endpoint{display:flex;align-items:center;gap:10px;margin:12px 0 16px;padding:11px 14px;background:#fff;border:1px solid var(--line);border-radius:9px;font:14px 'DM Mono',monospace;overflow-x:auto}
+  .m{flex:none;padding:3px 9px;border-radius:5px;font-weight:700;font-size:12px;color:#fff}
+  .m.post{background:var(--green)} .m.get{background:var(--blue)} .m.del{background:var(--red)}
+  pre{margin:10px 0 18px;padding:16px 18px;background:var(--code);color:#dbe7f8;border-radius:10px;overflow-x:auto;font:13px/1.6 'DM Mono',monospace}
+  code{font-family:'DM Mono',monospace;font-size:13px;background:#eaf0f7;padding:1px 6px;border-radius:4px}
+  pre code{background:none;padding:0;color:inherit}
+  .table-wrap{overflow-x:auto;margin:10px 0 18px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  table{border-collapse:collapse;width:100%;min-width:620px;font-size:14px}
+  th{background:#f3f6fa;text-align:left;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:#6a7c91;padding:10px 14px}
+  td{border-top:1px solid var(--line);padding:10px 14px;vertical-align:top}
+  td code{white-space:nowrap}
+  .req{color:var(--red);font-weight:700;font-size:12px}.opt{color:#8a99ab;font-size:12px;font-weight:700}
+  .note{margin:14px 0;padding:12px 16px;border-left:4px solid var(--blue);background:#eef4ff;border-radius:0 8px 8px 0;font-size:14px}
+  .note.warn{border-color:var(--amber);background:#fff6e8}
+  .tabs{display:flex;gap:4px;margin-top:10px}
+  .tabs button{border:1px solid var(--line);background:#fff;border-radius:7px 7px 0 0;padding:6px 14px;font:600 13px Manrope,sans-serif;color:var(--muted);cursor:pointer}
+  .tabs button.on{background:var(--code);color:#fff;border-color:var(--code)}
+  .tabs + pre{margin-top:0;border-top-left-radius:0}
+  .sample[hidden]{display:none}
+  @media (max-width:860px){.wrap{grid-template-columns:1fr}nav.side{display:none}main{padding:24px 16px 60px}h1{font-size:28px}}
+</style>
+</head>
+<body>
+<header class="top"><img src="/handoff-logo.png" alt="Handoff" /><span>API documentation · v1</span></header>
+<div class="wrap">
+<nav class="side">
+  <p>Getting started</p>
+  <a href="#intro">Introduction</a>
+  <a href="#auth">Authentication</a>
+  <a href="#base">Base URL &amp; format</a>
+  <p>Endpoints</p>
+  <a href="#upload">Upload cases</a>
+  <a href="#list">List cases</a>
+  <a href="#cancel">Cancel a case</a>
+  <p>Reference</p>
+  <a href="#fields">Case fields</a>
+  <a href="#statuses">Case statuses</a>
+  <a href="#errors">Errors</a>
+  <a href="#limits">Limits &amp; billing</a>
+</nav>
+<main>
+
+<section id="intro">
+  <h1>Handoff API</h1>
+  <p class="lead">Send your overdue loan accounts to Handoff from your own loan system, automatically, instead of uploading a spreadsheet every month. Each account becomes a recovery case that your finance team reviews, approves, and assigns to field agents in Handoff.</p>
+  <div class="note">The API does the same job as <b>Monthly register → Import monthly file</b>, using the same fields and the same rules. Anything you can put in the Excel/CSV register, you can send through the API.</div>
+</section>
+
+<section id="auth">
+  <h2>Authentication</h2>
+  <p>Every request needs your API key. Create one in Handoff under <b>Settings → API keys</b>. Keys start with <code>hk_</code> and are shown <b>only once</b>, so copy the key when it's created and store it safely.</p>
+  <p>Send the key in the <code>Authorization</code> header:</p>
+  <pre><code>Authorization: Bearer hk_your_api_key_here</code></pre>
+  <div class="note warn"><b>Keep the key secret.</b> Treat it like a password. Use it only from your server, never in a mobile app or web page, and don't share it on chat or email. If a key leaks, revoke it in Settings → API keys and create a new one. Every key belongs to your company, so cases it uploads land in your workspace.</div>
+</section>
+
+<section id="base">
+  <h2>Base URL &amp; format</h2>
+  <pre><code>https://handoff.bhodhix.com</code></pre>
+  <p>Requests and responses are JSON. Send <code>Content-Type: application/json</code> with every request that has a body. All endpoints use HTTPS.</p>
+</section>
+
+<section id="upload">
+  <h2>Upload cases</h2>
+  <div class="endpoint"><span class="m post">POST</span>/api/v1/cases</div>
+  <p>Creates or updates recovery cases. Send up to <b>1,000</b> accounts in one request.</p>
+  <p>Matching is by <code>accountNumber</code>. If an open case already has that account number, it is <b>updated</b> with the new amount and overdue days; otherwise a <b>new case</b> is created. That means you can safely send your whole overdue list every day or month.</p>
+
+  <h3>Request body</h3>
+  <p>Send an array of cases, or an object with a <code>cases</code> array. A single case object also works. See <a href="#fields">Case fields</a> for every field.</p>
+  <div class="tabs" data-group="up"><button class="on" data-t="curl">cURL</button><button data-t="node">Node.js</button><button data-t="py">Python</button></div>
+<pre class="sample" data-group="up" data-t="curl"><code>curl -X POST https://handoff.bhodhix.com/api/v1/cases \
+  -H "Authorization: Bearer hk_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cases": [
+      {
+        "accountNumber": "LN-2026-10045",
+        "borrowerName": "Rohan Malhotra",
+        "borrowerMobile": "9812345678",
+        "borrowerAddress": "12 MG Road, Shivaji Nagar, Pune",
+        "registration": "MH12 AB 4471",
+        "makeModel": "Maruti Suzuki Swift VXi",
+        "vehicleType": "4-wheeler",
+        "chassis": "MA3EWDE1S00512345",
+        "branch": "Pune Central",
+        "pendingAmount": 148500,
+        "overdueDays": 92
+      }
+    ]
+  }'</code></pre>
+<pre class="sample" data-group="up" data-t="node" hidden><code>const response = await fetch('https://handoff.bhodhix.com/api/v1/cases', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.HANDOFF_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    cases: [{
+      accountNumber: 'LN-2026-10045',
+      borrowerName: 'Rohan Malhotra',
+      borrowerMobile: '9812345678',
+      borrowerAddress: '12 MG Road, Shivaji Nagar, Pune',
+      registration: 'MH12 AB 4471',
+      makeModel: 'Maruti Suzuki Swift VXi',
+      vehicleType: '4-wheeler',
+      chassis: 'MA3EWDE1S00512345',
+      branch: 'Pune Central',
+      pendingAmount: 148500,
+      overdueDays: 92,
+    }],
+  }),
+});
+const result = await response.json();
+console.log(response.status, result);</code></pre>
+<pre class="sample" data-group="up" data-t="py" hidden><code>import os, requests
+
+response = requests.post(
+    "https://handoff.bhodhix.com/api/v1/cases",
+    headers={"Authorization": f"Bearer {os.environ['HANDOFF_API_KEY']}"},
+    json={"cases": [{
+        "accountNumber": "LN-2026-10045",
+        "borrowerName": "Rohan Malhotra",
+        "borrowerMobile": "9812345678",
+        "borrowerAddress": "12 MG Road, Shivaji Nagar, Pune",
+        "registration": "MH12 AB 4471",
+        "makeModel": "Maruti Suzuki Swift VXi",
+        "vehicleType": "4-wheeler",
+        "chassis": "MA3EWDE1S00512345",
+        "branch": "Pune Central",
+        "pendingAmount": 148500,
+        "overdueDays": 92,
+    }]},
+    timeout=30,
+)
+print(response.status_code, response.json())</code></pre>
+
+  <h3>Response — <code>201 Created</code></h3>
+<pre><code>{
+  "accepted": 1,        // rows saved (created + updated)
+  "rejected": 0,        // rows skipped because of errors
+  "created": 1,         // new cases
+  "updated": 0,         // existing open cases refreshed
+  "billing": {
+    "paid": 1,                // rows paid from your wallet
+    "pending": 0,             // rows waiting for a wallet recharge
+    "amountPaidPaise": 1000,
+    "amountDuePaise": 0
+  },
+  "errors": []
+}</code></pre>
+
+  <h3>When some rows are invalid</h3>
+  <p>Valid rows are still saved. Invalid rows are listed in <code>errors</code>, and <code>index</code> is the row's position in the array you sent (starting at 0). Fix those rows and send them again.</p>
+<pre><code>{
+  "accepted": 9,
+  "rejected": 1,
+  "created": 7,
+  "updated": 2,
+  "billing": { "paid": 9, "pending": 0, "amountPaidPaise": 9000, "amountDuePaise": 0 },
+  "errors": [
+    { "index": 3, "message": "Check mobile, vehicle type." }
+  ]
+}</code></pre>
+  <p>If <b>no</b> row is valid, you get <code>422</code> with the same <code>errors</code> list and nothing is saved.</p>
+</section>
+
+<section id="list">
+  <h2>List cases</h2>
+  <div class="endpoint"><span class="m get">GET</span>/api/v1/cases?status=assigned&amp;limit=100</div>
+  <p>Returns your cases, most recently updated first. Use it to follow each account's progress.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Query parameter</th><th>Description</th></tr>
+    <tr><td><code>status</code> <span class="opt">optional</span></td><td>Only cases in this status. See <a href="#statuses">Case statuses</a>.</td></tr>
+    <tr><td><code>limit</code> <span class="opt">optional</span></td><td>How many to return, 1–500. Default 100.</td></tr>
+  </table></div>
+<pre><code>curl https://handoff.bhodhix.com/api/v1/cases?status=assigned \
+  -H "Authorization: Bearer hk_your_api_key_here"</code></pre>
+  <h3>Response — <code>200 OK</code></h3>
+<pre><code>{
+  "cases": [
+    {
+      "id": "RC-2609-28465D",
+      "accountNumber": "LN-2026-10045",
+      "borrowerName": "Rohan Malhotra",
+      "registration": "MH12 AB 4471",
+      "status": "assigned",
+      "billingLocked": false,
+      "createdAt": "2026-09-26T06:10:00.000Z",
+      "updatedAt": "2026-09-26T09:42:00.000Z"
+    }
+  ]
+}</code></pre>
+  <p><code>billingLocked: true</code> means the case is waiting for a wallet recharge before your team can work on it.</p>
+</section>
+
+<section id="cancel">
+  <h2>Cancel a case</h2>
+  <div class="endpoint"><span class="m del">DELETE</span>/api/v1/cases/{accountNumber}</div>
+  <p>Cancels the open case for this account number, for example when the customer pays before recovery starts. This only works while the case is still <code>imported</code> and <b>no agent has it yet</b>. After that, manage the case inside Handoff.</p>
+<pre><code>curl -X DELETE https://handoff.bhodhix.com/api/v1/cases/LN-2026-10045 \
+  -H "Authorization: Bearer hk_your_api_key_here"</code></pre>
+  <h3>Response — <code>200 OK</code></h3>
+<pre><code>{ "id": "RC-2609-28465D", "accountNumber": "LN-2026-10045", "status": "cancelled" }</code></pre>
+  <div class="note warn">Cancelling does not refund the upload charge. You get <code>404</code> if no open case uses that account number, and <code>409</code> if the case is already with an agent.</div>
+</section>
+
+<section id="fields">
+  <h2>Case fields</h2>
+  <p>These are the same columns as the monthly register spreadsheet.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    <tr><td><code>accountNumber</code> <span class="req">required</span></td><td>string</td><td>Your loan account number. Handoff uses it to match and update cases, so keep it stable.</td></tr>
+    <tr><td><code>borrowerName</code> <span class="req">required</span></td><td>string</td><td>Customer's full name.</td></tr>
+    <tr><td><code>borrowerMobile</code> <span class="req">required</span></td><td>string</td><td>Indian mobile number. <code>9812345678</code>, <code>+91 98123 45678</code> and <code>919812345678</code> are all accepted.</td></tr>
+    <tr><td><code>borrowerAddress</code> <span class="req">required</span></td><td>string</td><td>Customer's address, which the agent uses for field visits.</td></tr>
+    <tr><td><code>registration</code> <span class="req">required</span></td><td>string</td><td>Vehicle number, for example <code>MH12 AB 4471</code>. It is saved in capitals.</td></tr>
+    <tr><td><code>makeModel</code> <span class="req">required</span></td><td>string</td><td>Make and model, for example <code>Honda Activa 6G</code>.</td></tr>
+    <tr><td><code>vehicleType</code> <span class="req">required</span></td><td>string</td><td><code>2-wheeler</code> or <code>4-wheeler</code>. <code>2W</code>/<code>4W</code> also work.</td></tr>
+    <tr><td><code>pendingAmount</code> <span class="req">required</span></td><td>number or string</td><td>Amount due in rupees, up to 2 decimals. <code>148500</code>, <code>"148500.50"</code> and <code>"₹1,48,500"</code> all work.</td></tr>
+    <tr><td><code>overdueDays</code> <span class="req">required</span></td><td>integer</td><td>Days overdue, a whole number such as <code>92</code>.</td></tr>
+    <tr><td><code>chassis</code> <span class="opt">optional</span></td><td>string</td><td>Chassis number. Agents use the last 6 characters to verify the vehicle.</td></tr>
+    <tr><td><code>branch</code> <span class="opt">optional</span></td><td>string</td><td>Your branch name, used for grouping and reports.</td></tr>
+  </table></div>
+</section>
+
+<section id="statuses">
+  <h2>Case statuses</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td><code>imported</code></td><td>Received, waiting for your team to approve recovery authority and assign an agent.</td></tr>
+    <tr><td><code>assigned</code></td><td>With one or more field agents.</td></tr>
+    <tr><td><code>unable_to_recover</code></td><td>The agent could not recover the vehicle, with a reason. Your team can reassign it.</td></tr>
+    <tr><td><code>custody_review</code></td><td>Vehicle recovered and parked, waiting for your team to check the custody report.</td></tr>
+    <tr><td><code>payment_pending</code></td><td>Custody approved, waiting for the customer to clear dues.</td></tr>
+    <tr><td><code>payment_confirmed</code></td><td>Your team confirmed payment. A release pass can be issued.</td></tr>
+    <tr><td><code>release_pass_printed</code></td><td>Release pass issued to the customer.</td></tr>
+    <tr><td><code>closed</code></td><td>Vehicle released. Done.</td></tr>
+    <tr><td><code>cancelled</code></td><td>Cancelled through the API or by your team.</td></tr>
+  </table></div>
+</section>
+
+<section id="errors">
+  <h2>Errors</h2>
+  <p>Error responses have an <code>error</code> message you can show or log.</p>
+<pre><code>{ "error": "A valid API key is required." }</code></pre>
+  <div class="table-wrap"><table>
+    <tr><th>Code</th><th>Meaning</th><th>What to do</th></tr>
+    <tr><td><code>401</code></td><td>Missing, wrong, or revoked API key.</td><td>Check the <code>Authorization</code> header, or create a new key.</td></tr>
+    <tr><td><code>404</code></td><td>No open case with that account number (cancel only).</td><td>Check the account number.</td></tr>
+    <tr><td><code>409</code></td><td>The case is already with an agent (cancel only).</td><td>Manage it inside Handoff.</td></tr>
+    <tr><td><code>422</code></td><td>Invalid request. The body is empty, has more than 1,000 rows, or no row is valid.</td><td>Read <code>errors</code>, fix the rows, and retry.</td></tr>
+    <tr><td><code>429</code></td><td>Too many requests.</td><td>Wait the number of seconds in the <code>Retry-After</code> header, then retry.</td></tr>
+    <tr><td><code>500</code></td><td>Something went wrong on our side.</td><td>Retry after a minute. If it keeps happening, contact us.</td></tr>
+  </table></div>
+</section>
+
+<section id="limits">
+  <h2>Limits &amp; billing</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Limit</th><th>Value</th></tr>
+    <tr><td>Cases per request</td><td>1 – 1,000</td></tr>
+    <tr><td>Requests per key</td><td>120 per minute</td></tr>
+    <tr><td>Request size</td><td>2 MB</td></tr>
+    <tr><td>Active API keys</td><td>1 included. Request more in Settings → API keys.</td></tr>
+  </table></div>
+  <p>Each accepted row is charged at your per-vehicle rate, the same as a spreadsheet import, from your Handoff wallet. The <code>billing</code> part of the upload response shows how many rows were paid now and how many are waiting. If your wallet runs short, rows are still saved but stay locked (<code>billingLocked: true</code>) until you recharge. They unlock automatically after that.</p>
+  <div class="note">Best practice: send your full overdue list once a day. Matching by account number keeps it free of duplicates. To drop an account that no longer needs recovery, cancel it with <code>DELETE</code>.</div>
+</section>
+
+</main>
+</div>
+<script>
+  document.querySelectorAll('.tabs').forEach((tabs) => {
+    tabs.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const g = tabs.dataset.group;
+      tabs.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      document.querySelectorAll(`pre.sample[data-group="${g}"]`).forEach((p) => { p.hidden = p.dataset.t !== b.dataset.t; });
+    });
+  });
+</script>
+</body>
+</html>
